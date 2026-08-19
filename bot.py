@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 import re
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from aiohttp import web, ClientSession
@@ -22,8 +23,6 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-# для workflow_dispatch
 GITHUB_TRIGGER_TOKEN = os.getenv("GITHUB_TRIGGER_TOKEN")
 GITHUB_OWNER = os.getenv("GITHUB_OWNER")
 GITHUB_REPO = os.getenv("GITHUB_REPO")
@@ -47,6 +46,11 @@ PROMO_TEXT = (
     "💼 <b>Ищешь подработку с гибким графиком в Польше?</b>\n\n"
     "Подключайся к доставке через <b>City Drive</b> и выходи на заказы в "
     "<b>Glovo / Uber Eats / Bolt Food</b>.\n\n"
+    "Что по условиям:\n"
+    "• свободный график — можно совмещать с учёбой или основной работой\n"
+    "• выплаты каждую неделю на карту\n"
+    "• можно работать на своём авто, велосипеде или самокате\n"
+    "• быстрый старт через проверенного партнёра\n\n"
     "🎁 <b>Бонус для новых:</b> 50 PLN на баланс при регистрации\n"
     "🏷 <b>Промокод:</b> PracaBOT\n\n"
     "👇 Нажми на кнопку ниже, чтобы оставить заявку"
@@ -73,19 +77,32 @@ class SetupStates(StatesGroup):
 
 
 CITIES = [
-    ("Warszawa", "Warszawa"),
-    ("Kraków", "Kraków"),
-    ("Wrocław", "Wrocław"),
-    ("Poznań", "Poznań"),
-    ("Gdańsk", "Gdańsk"),
-    ("Łódź", "Łódź"),
-    ("Katowice", "Katowice"),
-    ("Lublin", "Lublin"),
-    ("Toruń", "Toruń"),
-    ("Szczecin", "Szczecin"),
-    ("Bydgoszcz", "Bydgoszcz"),
-    ("Gdynia", "Gdynia"),
+    ("Warszawa", "Warszawa"), ("Kraków", "Kraków"),
+    ("Wrocław", "Wrocław"), ("Poznań", "Poznań"),
+    ("Gdańsk", "Gdańsk"), ("Łódź", "Łódź"),
+    ("Katowice", "Katowice"), ("Lublin", "Lublin"),
+    ("Toruń", "Toruń"), ("Szczecin", "Szczecin"),
+    ("Bydgoszcz", "Bydgoszcz"), ("Gdynia", "Gdynia"),
 ]
+
+CITY_SLUGS = {
+    "warszawa": "warszawa", "kraków": "krakow", "krakow": "krakow",
+    "wrocław": "wroclaw", "wroclaw": "wroclaw",
+    "poznań": "poznan", "poznan": "poznan",
+    "gdańsk": "gdansk", "gdansk": "gdansk",
+    "łódź": "lodz", "lodz": "lodz",
+    "katowice": "katowice", "lublin": "lublin",
+    "toruń": "torun", "torun": "torun",
+    "szczecin": "szczecin", "bydgoszcz": "bydgoszcz",
+    "białystok": "bialystok", "bialystok": "bialystok",
+    "gdynia": "gdynia",
+    "częstochowa": "czestochowa", "czestochowa": "czestochowa",
+    "sosnowiec": "sosnowiec",
+    "rzeszów": "rzeszow", "rzeszow": "rzeszow",
+    "kielce": "kielce", "gliwice": "gliwice",
+    "zabrze": "zabrze", "olsztyn": "olsztyn", "opole": "opole",
+    "zielona góra": "zielona-gora", "zielona gora": "zielona-gora",
+}
 
 UMOWY = [
     ("Dowolna", "any"),
@@ -111,29 +128,181 @@ ETAT_DISPLAY = {
 
 TEXTS = {
     "ru": {
-        "welcome": "👋 Привет! Я помогу найти работу в Польше.\n\nВыбери язык:",
+        "welcome": (
+            "👋 Привет! Я помогу найти работу в Польше.\n\n"
+            "Буду присылать свежие вакансии по мере их появления "
+            "с OLX, Praca.pl и GoWork.\n\n"
+            "Выбери язык:"
+        ),
         "choose_city": "🏙 Выбери город:",
-        "enter_city": "✏️ Напиши город на польском:",
-        "choose_etat": "⏰ Выбери тип занятости (можно несколько):\n\nПотом ✅ Готово",
+        "enter_city": "✏️ Напиши название города на польском (например: Szczecin):",
+        "choose_etat": "⏰ Выбери тип занятости (можно несколько):\n\nНажми нужные, потом ✅ Готово",
         "choose_umowa": "📋 Выбери тип договора:",
-        "saved": "✅ Фильтры сохранены!\n\n🏙 {city}\n⏰ {etat}\n📋 {umowa}\n\n🔍 Ищу актуальные вакансии...",
-        "loading_city": "🔍 По этому городу пока нет кэша в базе.\nПробую быстро подтянуть вакансии, подожди 20–60 секунд...",
-        "no_jobs": "😔 Пока не нашёл вакансий по твоим фильтрам.",
+        "saved": (
+            "✅ Фильтры сохранены!\n\n"
+            "🏙 Город: {city}\n"
+            "⏰ Занятость: {etat}\n"
+            "📋 Договор: {umowa}\n\n"
+            "🔍 Ищу свежие вакансии на OLX, Praca.pl и GoWork..."
+        ),
+        "loading_city": (
+            "🔍 По этому городу собираю свежие вакансии...\n"
+            "Подожди 30–60 секунд."
+        ),
+        "no_jobs": "😔 Пока нет вакансий по твоим фильтрам.\nБуду проверять каждые 15 минут!",
         "menu_active": "🟢 Бот запущен и ищет вакансии. Кнопки управления ниже 👇",
-        "stop_donate": f"⏹ Рассылка остановлена.\n\n💳 <code>{DONATE_ACCOUNT}</code>\n\nПо вопросам: @Hriaker1",
-        "reset_msg": "🔄 Фильтры сброшены! Выбери язык:",
-        "help": "🤖 /start /reset /stop /help",
-        "already_stopped": "ℹ️ Ты не подписан. Нажми кнопку ниже чтобы начать.",
+        "stop_donate": (
+            "⏹ Рассылка остановлена.\n\n"
+            "🙏 Надеюсь, с моей помощью тебе удалось найти желанную вакансию.\n"
+            "Ты получил то, что хотел — а если хочешь отблагодарить "
+            "дедди лавэхой, то реализуй и это своё желание 😏\n\n"
+            f"💳 <code>{DONATE_ACCOUNT}</code>\n\n"
+            "По вопросам и сотрудничеству: @Hriaker1"
+        ),
+        "reset_msg": "🔄 Фильтры сброшены! Начнём заново.\n\nВыбери язык:",
+        "help": (
+            "🤖 <b>Что умеет бот:</b>\n\n"
+            "Агрегирует публично доступные вакансии "
+            "с OLX, Praca.pl и GoWork и присылает их тебе.\n\n"
+            "<b>Управление:</b>\n"
+            f"<b>{BTN_RESET}</b> — настроить фильтры заново\n"
+            f"<b>{BTN_STOP}</b> — остановить рассылку\n"
+            f"<b>{BTN_HELP}</b> — эта справка\n\n"
+            "По вопросам и сотрудничеству: @Hriaker1"
+        ),
+        "already_stopped": "ℹ️ Ты не подписан на вакансии. Нажми кнопку ниже чтобы начать.",
         "btn_all": "🇵🇱 Вся Польша",
         "btn_custom": "✏️ Свой город",
         "btn_done": "✅ Готово",
-        "after_initial": "👆 Это были последние актуальные вакансии.\n🔄 Дальше бот будет слать новые по мере появления.",
-    }
+        "after_initial": (
+            "👆 Это были последние актуальные вакансии за сегодня.\n\n"
+            "🔄 Теперь бот будет присылать только новые вакансии "
+            "по мере их появления на OLX, Praca.pl и GoWork."
+        ),
+    },
+    "pl": {
+        "welcome": (
+            "👋 Cześć! Pomogę znaleźć pracę w Polsce.\n\n"
+            "Będę wysyłać nowe oferty na bieżąco z OLX, Praca.pl i GoWork.\n\n"
+            "Wybierz język:"
+        ),
+        "choose_city": "🏙 Wybierz miasto:",
+        "enter_city": "✏️ Wpisz miasto (np. Szczecin):",
+        "choose_etat": "⏰ Wybierz etat (można kilka):\n\nPotem ✅ Gotowe",
+        "choose_umowa": "📋 Wybierz umowę:",
+        "saved": (
+            "✅ Zapisane!\n\n"
+            "🏙 Miasto: {city}\n"
+            "⏰ Etat: {etat}\n"
+            "📋 Umowa: {umowa}\n\n"
+            "🔍 Szukam ofert na OLX, Praca.pl i GoWork..."
+        ),
+        "loading_city": "🔍 Szukam nowych ofert dla tego miasta...\nPoczekaj 30–60 sekund.",
+        "no_jobs": "😔 Brak ofert. Sprawdzam co 15 min!",
+        "menu_active": "🟢 Bot działa i szuka ofert. Przyciski poniżej 👇",
+        "stop_donate": (
+            "⏹ Wysyłka zatrzymana.\n\n"
+            f"💳 <code>{DONATE_ACCOUNT}</code>\n\n"
+            "Pytania i współpraca: @Hriaker1"
+        ),
+        "reset_msg": "🔄 Zresetowano! Zaczynamy od nowa.\n\nWybierz język:",
+        "help": (
+            "🤖 <b>Co robi bot:</b>\n\n"
+            "Agreguje oferty pracy z OLX, Praca.pl i GoWork.\n\n"
+            f"<b>{BTN_RESET}</b> — ustaw filtry od nowa\n"
+            f"<b>{BTN_STOP}</b> — zatrzymaj wysyłkę\n"
+            f"<b>{BTN_HELP}</b> — ta pomoc\n\n"
+            "Pytania i współpraca: @Hriaker1"
+        ),
+        "already_stopped": "ℹ️ Nie masz subskrypcji. Naciśnij przycisk poniżej.",
+        "btn_all": "🇵🇱 Cała Polska",
+        "btn_custom": "✏️ Inne miasto",
+        "btn_done": "✅ Gotowe",
+        "after_initial": (
+            "👆 To były ostatnie aktualne oferty z dzisiaj.\n\n"
+            "🔄 Bot będzie teraz wysyłać tylko nowe oferty na bieżąco."
+        ),
+    },
+    "ua": {
+        "welcome": (
+            "👋 Привіт! Допоможу знайти роботу в Польщі.\n\n"
+            "Бот надсилатиме нові вакансії з OLX, Praca.pl та GoWork.\n\n"
+            "Обери мову:"
+        ),
+        "choose_city": "🏙 Обери місто:",
+        "enter_city": "✏️ Напиши місто польською (наприклад: Szczecin):",
+        "choose_etat": "⏰ Обери зайнятість (можна кілька):\n\nПотім ✅ Готово",
+        "choose_umowa": "📋 Обери договір:",
+        "saved": (
+            "✅ Збережено!\n\n"
+            "🏙 Місто: {city}\n"
+            "⏰ Зайнятість: {etat}\n"
+            "📋 Договір: {umowa}\n\n"
+            "🔍 Шукаю вакансії на OLX, Praca.pl та GoWork..."
+        ),
+        "loading_city": "🔍 Шукаю свіжі вакансії для цього міста...\nЗачекай 30–60 секунд.",
+        "no_jobs": "😔 Немає вакансій. Перевірю через 15 хв!",
+        "menu_active": "🟢 Бот запущено і шукає вакансії. Кнопки керування нижче 👇",
+        "stop_donate": (
+            "⏹ Розсилку зупинено.\n\n"
+            f"💳 <code>{DONATE_ACCOUNT}</code>\n\n"
+            "Питання та співпраця: @Hriaker1"
+        ),
+        "reset_msg": "🔄 Скинуто! Починаємо заново.\n\nОбери мову:",
+        "help": (
+            "🤖 <b>Що вміє бот:</b>\n\n"
+            "Агрегує публічні вакансії з OLX, Praca.pl та GoWork.\n\n"
+            f"<b>{BTN_RESET}</b> — налаштувати фільтри заново\n"
+            f"<b>{BTN_STOP}</b> — зупинити розсилку\n"
+            f"<b>{BTN_HELP}</b> — ця довідка\n\n"
+            "Питання та співпраця: @Hriaker1"
+        ),
+        "already_stopped": "ℹ️ Ти не підписаний. Натисни кнопку нижче.",
+        "btn_all": "🇵🇱 Вся Польща",
+        "btn_custom": "✏️ Своє місто",
+        "btn_done": "✅ Готово",
+        "after_initial": (
+            "👆 Це були останні актуальні вакансії за сьогодні.\n\n"
+            "🔄 Тепер бот надсилатиме лише нові вакансії щойно вони з'являться."
+        ),
+    },
 }
+
 
 def t(lang, key, **kwargs):
     text = TEXTS.get(lang, TEXTS["ru"]).get(key, "")
     return text.format(**kwargs) if kwargs else text
+
+
+def get_user_lang(tid):
+    user = db_get_user(tid)
+    return user.get("language", "ru") if user else "ru"
+
+
+def get_city_slug(city):
+    if not city:
+        return ""
+    cl = city.lower().strip()
+    if cl in CITY_SLUGS:
+        return CITY_SLUGS[cl]
+    for k, v in {
+        'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l',
+        'ń': 'n', 'ó': 'o', 'ś': 's', 'ź': 'z',
+        'ż': 'z', ' ': '-'
+    }.items():
+        cl = cl.replace(k, v)
+    return cl
+
+
+def city_matches(job_city, filter_city):
+    if not filter_city or filter_city == "all":
+        return True
+    if not job_city:
+        return False
+    fc = get_city_slug(filter_city)
+    jc = get_city_slug(job_city)
+    return fc == jc or fc in jc or jc in fc
+
 
 def strip_html(text):
     if not text:
@@ -145,43 +314,56 @@ def strip_html(text):
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
+
 def normalize_umowa(umowa):
     if not umowa:
         return None
+    if isinstance(umowa, list):
+        umowa = " ".join(str(v) for v in umowa)
     u = str(umowa).lower().strip()
     if u in ["umowa_o_prace", "umowa_zlecenie", "umowa_o_dzielo", "b2b", "staz"]:
         return u
+    u = u.replace("_", " ").replace("-", " ")
     if "zlecenie" in u: return "umowa_zlecenie"
     if "o pracę" in u or "o prace" in u: return "umowa_o_prace"
-    if "b2b" in u or "kontrakt" in u: return "b2b"
+    if "b2b" in u or "selfemployment" in u or "kontrakt b2b" in u: return "b2b"
     if "dzieło" in u or "dzielo" in u: return "umowa_o_dzielo"
     if "staż" in u or "staz" in u or "praktyk" in u: return "staz"
     return None
 
+
 def normalize_etat(etat):
     if not etat:
         return None
+    if isinstance(etat, list):
+        etat = " ".join(str(v) for v in etat)
     e = str(etat).lower().strip()
     if e in ["full", "part"]:
         return e
-    if any(x in e for x in ["part", "niepełny", "niepelny", "1/2", "część etatu", "czesc etatu"]):
+    e = e.replace("_", " ").replace("-", " ")
+    if any(x in e for x in [
+        "parttime", "part time", "niepełny", "niepelny",
+        "1/2", "pół etatu", "pol etatu", "3/4",
+        "część etatu", "czesc etatu", "tymczasowa", "dodatkowa"
+    ]):
         return "part"
-    if any(x in e for x in ["full", "pełny", "pelny", "cały", "caly"]):
+    if any(x in e for x in [
+        "fulltime", "full time", "pełny", "pelny",
+        "cały etat", "caly etat"
+    ]):
         return "full"
     return None
+
 
 def job_matches_filter(job, user_filter):
     uf = user_filter.get("umowa", "any")
     ef = user_filter.get("etat_full", True)
     ep = user_filter.get("etat_part", True)
-
     job_umowa = normalize_umowa(job.get("umowa"))
     job_etat = normalize_etat(job.get("etat"))
-
     if uf != "any":
         if not job_umowa or job_umowa != uf:
             return False
-
     if not (ef and ep):
         if not job_etat:
             return False
@@ -189,8 +371,8 @@ def job_matches_filter(job, user_filter):
             return False
         if ep and not ef and job_etat != "part":
             return False
-
     return True
+
 
 def is_delivery_job(job):
     title = (job.get("title") or "").lower()
@@ -198,7 +380,8 @@ def is_delivery_job(job):
     text = f"{title} {company}"
     return any(kw in text for kw in BLOCKED_KEYWORDS)
 
-# ==================== DB HELPERS ====================
+
+# ==================== DATABASE ====================
 
 def db_upsert_user(tid, username=None):
     try:
@@ -209,6 +392,7 @@ def db_upsert_user(tid, username=None):
     except Exception as e:
         logger.error(f"db_upsert_user: {e}")
 
+
 def db_get_user(tid):
     try:
         r = supabase.table("users").select("*").eq("telegram_id", tid).execute()
@@ -216,11 +400,13 @@ def db_get_user(tid):
     except:
         return None
 
+
 def db_set_user_active(tid, a):
     try:
         supabase.table("users").update({"is_active": a}).eq("telegram_id", tid).execute()
     except:
         pass
+
 
 def db_upsert_filter(tid, city, ef, ep, umowa):
     try:
@@ -231,11 +417,13 @@ def db_upsert_filter(tid, city, ef, ep, umowa):
     except Exception as e:
         logger.error(f"db_upsert_filter: {e}")
 
+
 def db_delete_filter(tid):
     try:
         supabase.table("user_filters").delete().eq("telegram_id", tid).execute()
     except:
         pass
+
 
 def db_get_filter(tid):
     try:
@@ -244,6 +432,7 @@ def db_get_filter(tid):
     except:
         return None
 
+
 def db_get_all_filters():
     try:
         r = supabase.table("user_filters").select("*").execute()
@@ -251,12 +440,15 @@ def db_get_all_filters():
     except:
         return []
 
+
 def db_already_sent(tid, jid):
     try:
-        r = supabase.table("sent_jobs").select("id").eq("telegram_id", tid).eq("job_id", jid).execute()
+        r = supabase.table("sent_jobs").select("id").eq(
+            "telegram_id", tid).eq("job_id", jid).execute()
         return bool(r.data)
     except:
         return False
+
 
 def db_mark_sent(tid, jid):
     try:
@@ -264,92 +456,108 @@ def db_mark_sent(tid, jid):
     except:
         pass
 
+
 def db_clear_sent(tid):
     try:
         supabase.table("sent_jobs").delete().eq("telegram_id", tid).execute()
     except:
         pass
 
-def db_get_jobs_for_city(city, limit=150):
+
+def db_get_jobs_for_city(city, limit=150, hours=24):
+    """
+    Берём только свежие вакансии за последние N часов.
+    При первом старте — за 24 часа.
+    При плановой рассылке — за последние 20 минут.
+    """
     try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
         if city == "all":
-            r = supabase.table("jobs").select("*").order("created_at", desc=True).limit(limit).execute()
+            r = supabase.table("jobs").select("*") \
+                .gt("created_at", cutoff) \
+                .order("created_at", desc=True) \
+                .limit(limit).execute()
             return r.data or []
-        r = supabase.table("jobs").select("*").ilike("city", f"%{city}%").order("created_at", desc=True).limit(limit).execute()
+
+        r = supabase.table("jobs").select("*") \
+            .ilike("city", f"%{city}%") \
+            .gt("created_at", cutoff) \
+            .order("created_at", desc=True) \
+            .limit(limit).execute()
         return r.data or []
     except Exception as e:
         logger.error(f"db_get_jobs_for_city: {e}")
         return []
 
+
 # ==================== GITHUB ACTIONS TRIGGER ====================
 
 async def trigger_scraper_for_city(city: str) -> bool:
     if not GITHUB_TRIGGER_TOKEN or not GITHUB_OWNER or not GITHUB_REPO:
-        logger.error("GitHub trigger vars are missing")
+        logger.warning("GitHub trigger vars missing — skipping on-demand scrape")
         return False
 
-    url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW_FILE}/dispatches"
+    url = (
+        f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
+        f"/actions/workflows/{GITHUB_WORKFLOW_FILE}/dispatches"
+    )
     headers = {
         "Authorization": f"Bearer {GITHUB_TRIGGER_TOKEN}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    payload = {
-        "ref": GITHUB_REF,
-        "inputs": {
-            "city": city
-        }
-    }
+    payload = {"ref": GITHUB_REF, "inputs": {"city": city}}
 
     try:
         async with ClientSession() as session:
             async with session.post(url, headers=headers, json=payload, timeout=30) as resp:
-                txt = await resp.text()
                 if resp.status in (200, 201, 204):
-                    logger.info(f"GitHub workflow dispatched for city={city}")
+                    logger.info(f"✅ GitHub workflow dispatched for city={city}")
                     return True
+                txt = await resp.text()
                 logger.error(f"GitHub dispatch failed {resp.status}: {txt}")
                 return False
     except Exception as e:
         logger.error(f"trigger_scraper_for_city: {e}")
         return False
 
-async def wait_for_city_jobs(city: str, attempts: int = 12, delay: int = 5):
-    """
-    Ждём до ~60 секунд, пока workflow соберёт вакансии.
-    """
-    for _ in range(attempts):
-        jobs = db_get_jobs_for_city(city, limit=150)
-        if jobs:
-            return jobs
+
+async def wait_for_city_jobs(city: str, attempts: int = 10, delay: int = 6):
+    """Ждём пока scraper соберёт вакансии — до 60 сек"""
+    for i in range(attempts):
         await asyncio.sleep(delay)
+        jobs = db_get_jobs_for_city(city, limit=150, hours=1)
+        if jobs:
+            logger.info(f"✅ Got {len(jobs)} jobs for {city} after {(i+1)*delay}s")
+            return jobs
     return []
+
 
 # ==================== WEB SERVER ====================
 
 async def health_check(request):
     return web.Response(text="OK", status=200)
 
+
 async def start_web_server():
     app = web.Application()
     app.router.add_get("/", health_check)
     app.router.add_get("/health", health_check)
-
     runner = web.AppRunner(app)
     await runner.setup()
-
     port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-
     logger.info(f"🌐 Web server started on port {port}")
 
-# ==================== SEND ====================
+
+# ==================== FORMAT ====================
 
 def format_job(job):
     ut = UMOWA_DISPLAY.get(job.get("umowa")) or job.get("umowa")
     et = ETAT_DISPLAY.get(job.get("etat")) or job.get("etat")
-    lines = [f"💼 <b>{strip_html(job.get('title'))}</b>"]
+    lines = [f"💼 <b>{strip_html(job.get('title', ''))}</b>"]
     if job.get("company"):
         lines.append(f"🏢 {strip_html(job['company'])}")
     if ut:
@@ -360,28 +568,40 @@ def format_job(job):
         lines.append(f"📍 {strip_html(job['city'])}")
     if job.get("salary"):
         lines.append(f"💰 {strip_html(job['salary'])}")
-    lines.append(f"📌 {job.get('source','—')}")
+    lines.append(f"📌 {job.get('source', '—')}")
     if job.get("url"):
         lines.append(f"🔗 <a href='{job['url']}'>Открыть вакансию</a>")
     lines.append("")
-    lines.append("🤖 <a href='https://t.me/szukam_pracy_bot'>@szukam_pracy_bot</a> — свежие вакансии в Польше 🇵🇱")
+    lines.append(
+        "🤖 <a href='https://t.me/szukam_pracy_bot'>@szukam_pracy_bot</a> "
+        "— свежие вакансии в Польше 🇵🇱"
+    )
     return "\n".join(lines)
+
 
 async def send_promo(chat_id):
     try:
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="🚀 Получить 50 PLN и начать", url=REF_LINK)
         ]])
-        sent_msg = await bot.send_message(chat_id, PROMO_TEXT, reply_markup=kb, parse_mode="HTML")
+        sent_msg = await bot.send_message(
+            chat_id, PROMO_TEXT, reply_markup=kb, parse_mode="HTML"
+        )
         try:
-            await bot.pin_chat_message(chat_id=chat_id, message_id=sent_msg.message_id, disable_notification=True)
-        except:
+            await bot.pin_chat_message(
+                chat_id=chat_id,
+                message_id=sent_msg.message_id,
+                disable_notification=True
+            )
+        except Exception:
             pass
     except Exception as e:
         logger.error(f"promo: {e}")
 
+
 async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=False):
     sent, sf, ss, blocked = 0, 0, 0, 0
+
     for job in jobs:
         if sent >= limit:
             break
@@ -403,20 +623,28 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
             )
             db_mark_sent(tid, job['id'])
             sent += 1
-            await asyncio.sleep(0.1)  # безопасно для Telegram
+            await asyncio.sleep(0.1)
         except Exception as e:
             logger.error(f"send: {e}")
 
     logger.info(f"Sent={sent} filtered={sf} already={ss} blocked={blocked}")
 
-    if is_initial and sent > 0:
+    # Сообщение после первых 8 вакансий
+    if is_initial:
         lang = get_user_lang(tid)
-        try:
-            await bot.send_message(tid, t(lang, "after_initial"))
-        except:
-            pass
+        if sent > 0:
+            try:
+                await bot.send_message(tid, t(lang, "after_initial"))
+            except Exception:
+                pass
+        else:
+            try:
+                await bot.send_message(tid, t(lang, "no_jobs"))
+            except Exception:
+                pass
 
     return sent
+
 
 # ==================== KEYBOARDS ====================
 
@@ -426,6 +654,7 @@ def kb_lang():
         InlineKeyboardButton(text="🇵🇱 PL", callback_data="l_pl"),
         InlineKeyboardButton(text="🇺🇦 UA", callback_data="l_ua"),
     ]])
+
 
 def kb_cities(lang):
     rows, row = [], []
@@ -440,6 +669,7 @@ def kb_cities(lang):
     rows.append([InlineKeyboardButton(text=t(lang, "btn_custom"), callback_data="c_custom")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
+
 def kb_etat(lang, sel):
     f = "✅ " if sel.get("full") else "☐ "
     p = "✅ " if sel.get("part") else "☐ "
@@ -449,11 +679,13 @@ def kb_etat(lang, sel):
         [InlineKeyboardButton(text=t(lang, "btn_done"), callback_data="e_done")],
     ])
 
+
 def kb_umowa():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=n, callback_data=f"u_{v}")]
         for n, v in UMOWY
     ])
+
 
 def kb_active_menu():
     return ReplyKeyboardMarkup(
@@ -464,11 +696,13 @@ def kb_active_menu():
         resize_keyboard=True
     )
 
+
 def kb_stopped_menu():
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text=BTN_RESTART)]],
         resize_keyboard=True
     )
+
 
 # ==================== HANDLERS ====================
 
@@ -483,6 +717,7 @@ async def cmd_start(m: Message, state: FSMContext):
     await m.answer("⚙️", reply_markup=ReplyKeyboardRemove())
     await m.answer(t("ru", "welcome"), reply_markup=kb_lang())
 
+
 @router.message(Command("reset"))
 async def cmd_reset(m: Message, state: FSMContext):
     await state.clear()
@@ -495,6 +730,7 @@ async def cmd_reset(m: Message, state: FSMContext):
     await m.answer("⚙️", reply_markup=ReplyKeyboardRemove())
     await m.answer(t(lang, "reset_msg"), reply_markup=kb_lang())
 
+
 @router.message(Command("stop"))
 async def cmd_stop(m: Message, state: FSMContext):
     await state.clear()
@@ -506,38 +742,48 @@ async def cmd_stop(m: Message, state: FSMContext):
     db_set_user_active(m.from_user.id, False)
     await m.answer(t(lang, "stop_donate"), parse_mode="HTML", reply_markup=kb_stopped_menu())
 
+
 @router.message(Command("help"))
 async def cmd_help(m: Message):
     lang = get_user_lang(m.from_user.id)
     await m.answer(t(lang, "help"), parse_mode="HTML")
 
+
+# --- Кнопки нижнего меню ---
 @router.message(F.text == BTN_RESET)
 async def btn_reset(m: Message, state: FSMContext):
     await cmd_reset(m, state)
+
 
 @router.message(F.text == BTN_STOP)
 async def btn_stop(m: Message, state: FSMContext):
     await cmd_stop(m, state)
 
+
 @router.message(F.text == BTN_HELP)
 async def btn_help(m: Message):
     await cmd_help(m)
+
 
 @router.message(F.text == BTN_RESTART)
 async def btn_restart(m: Message, state: FSMContext):
     await cmd_start(m, state)
 
+
+# --- Inline flow ---
 @router.callback_query(SetupStates.lang, F.data.startswith("l_"))
 async def on_lang(c: CallbackQuery, state: FSMContext):
     lang = c.data[2:]
     await state.update_data(lang=lang)
     try:
-        supabase.table("users").update({"language": lang}).eq("telegram_id", c.from_user.id).execute()
-    except:
+        supabase.table("users").update({"language": lang}).eq(
+            "telegram_id", c.from_user.id).execute()
+    except Exception:
         pass
     await state.set_state(SetupStates.city)
     await c.message.edit_text(t(lang, "choose_city"), reply_markup=kb_cities(lang))
     await c.answer()
+
 
 @router.callback_query(SetupStates.city, F.data.startswith("c_"))
 async def on_city(c: CallbackQuery, state: FSMContext):
@@ -556,7 +802,11 @@ async def on_city(c: CallbackQuery, state: FSMContext):
     await c.message.edit_text(t(lang, "choose_etat"), reply_markup=kb_etat(lang, sel))
     await c.answer()
 
-@router.message(SetupStates.city_custom)
+
+@router.message(
+    SetupStates.city_custom,
+    ~F.text.in_({BTN_RESET, BTN_STOP, BTN_HELP, BTN_RESTART})
+)
 async def on_city_custom(m: Message, state: FSMContext):
     data = await state.get_data()
     lang = data.get("lang", "ru")
@@ -565,6 +815,7 @@ async def on_city_custom(m: Message, state: FSMContext):
     await state.set_state(SetupStates.etat)
     sel = data.get("etat", {"full": False, "part": False})
     await m.answer(t(lang, "choose_etat"), reply_markup=kb_etat(lang, sel))
+
 
 @router.callback_query(SetupStates.etat, F.data.startswith("e_"))
 async def on_etat(c: CallbackQuery, state: FSMContext):
@@ -588,6 +839,7 @@ async def on_etat(c: CallbackQuery, state: FSMContext):
     await c.message.edit_reply_markup(reply_markup=kb_etat(lang, sel))
     await c.answer()
 
+
 @router.callback_query(SetupStates.umowa, F.data.startswith("u_"))
 async def on_umowa(c: CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -598,21 +850,14 @@ async def on_umowa(c: CallbackQuery, state: FSMContext):
     sel = data.get("etat", {"full": True, "part": False})
 
     ep = []
-    if sel.get("full"):
-        ep.append("Pełny etat")
-    if sel.get("part"):
-        ep.append("Niepełny etat")
+    if sel.get("full"): ep.append("Pełny etat")
+    if sel.get("part"): ep.append("Niepełny etat")
     ed = ", ".join(ep) if ep else "Pełny etat"
     ud = next((n for n, v in UMOWY if v == uv), uv)
 
     db_upsert_filter(c.from_user.id, city, sel.get("full", True), sel.get("part", False), uv)
     await state.clear()
-
-    uf = {
-        "umowa": uv,
-        "etat_full": sel.get("full", True),
-        "etat_part": sel.get("part", False),
-    }
+    uf = {"umowa": uv, "etat_full": sel.get("full", True), "etat_part": sel.get("part", False)}
 
     await c.message.edit_text(t(lang, "saved", city=cd, etat=ed, umowa=ud))
     await c.answer()
@@ -621,37 +866,46 @@ async def on_umowa(c: CallbackQuery, state: FSMContext):
     await send_promo(c.from_user.id)
     await asyncio.sleep(1)
 
-    # Сначала пробуем быстро найти вакансии в базе
-    jobs = db_get_jobs_for_city(city)
+    # Берём свежие вакансии за последние 24 часа
+    jobs = db_get_jobs_for_city(city, limit=150, hours=24)
 
-    # Если нет — дёргаем GitHub Actions под этот город
+    # Если нет в базе — пробуем дёрнуть GitHub Actions
     if not jobs and city != "all":
         await bot.send_message(c.from_user.id, t(lang, "loading_city"))
         ok = await trigger_scraper_for_city(city)
         if ok:
             jobs = await wait_for_city_jobs(city)
 
-    if jobs:
-        sent = await send_jobs_to_user(c.from_user.id, jobs, user_filter=uf, limit=8, is_initial=True)
-        if sent == 0:
-            await bot.send_message(c.from_user.id, t(lang, "no_jobs"))
-    else:
-        await bot.send_message(c.from_user.id, t(lang, "no_jobs"))
+    # Отправляем первые 8 вакансий
+    await send_jobs_to_user(
+        c.from_user.id, jobs,
+        user_filter=uf, limit=8, is_initial=True
+    )
 
 
 # ==================== SCHEDULER ====================
 
 async def scheduled_check():
+    """
+    Каждые 15 минут проверяем новые вакансии в базе.
+    Берём только то, что появилось за последние 20 минут.
+    """
     logger.info("⏰ Check")
     filters = db_get_all_filters()
     if not filters:
         return
 
-    # Бот больше не парсит, только читает Supabase
+    cities = list(set(f.get("city", "all") for f in filters))
+    city_jobs = {}
+    for city in cities:
+        # Только свежак за последние 20 минут
+        city_jobs[city] = db_get_jobs_for_city(city, limit=100, hours=0.35)
+        await asyncio.sleep(0.5)
+
     for f in filters:
         tid = f["telegram_id"]
         city = f.get("city", "all")
-        jobs = db_get_jobs_for_city(city)
+        jobs = city_jobs.get(city, [])
         uf = {
             "umowa": f.get("umowa", "any"),
             "etat_full": f.get("etat_full", True),
@@ -664,12 +918,14 @@ async def scheduled_check():
     logger.info("✅ Done")
 
 
+# ==================== MAIN ====================
+
 async def main():
     logger.info("🚀 Bot starting...")
     await start_web_server()
 
     s = AsyncIOScheduler()
-    s.add_job(scheduled_check, "interval", minutes=10, id="check", replace_existing=True)
+    s.add_job(scheduled_check, "interval", minutes=15, id="check", replace_existing=True)
     s.start()
 
     logger.info("⏰ Scheduler started")
