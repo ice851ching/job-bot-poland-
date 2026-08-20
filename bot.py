@@ -179,6 +179,13 @@ TEXTS = {
             "🔄 Теперь бот будет присылать только новые вакансии "
             "по мере их появления на OLX, Praca.pl и GoWork."
         ),
+        "search_paused": (
+            "⏸ <b>Поиск временно приостановлен</b>\n\n"
+            "Ты пользуешься поиском уже 3 дня. Чтобы бот продолжил присылать "
+            "тебе свежие вакансии бесплатно, подтверди, что ты всё ещё ищешь работу! 👇"
+        ),
+        "btn_continue": "🔄 Продолжить поиск",
+        "search_renewed": "🟢 Отлично! Поиск успешно возобновлен еще на 3 дня. Свежие вакансии уже в пути! 🚀",
     },
     "pl": {
         "welcome": (
@@ -222,6 +229,13 @@ TEXTS = {
             "👆 To były ostatnie aktualne oferty z dzisiaj.\n\n"
             "🔄 Bot będzie teraz wysyłać tylko nowe oferty na bieżąco."
         ),
+        "search_paused": (
+            "⏸ <b>Wyszukiwanie wstrzymane</b>\n\n"
+            "Korzystasz z bota już od 3 dni. Aby kontynuować darmowe otrzymywanie "
+            "nowych ofert, potwierdź, że nadal szukasz pracy! 👇"
+        ),
+        "btn_continue": "🔄 Kontynuuj wyszukiwanie",
+        "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowe oferty już wkrótce! 🚀",
     },
     "ua": {
         "welcome": (
@@ -262,9 +276,16 @@ TEXTS = {
         "btn_custom": "✏️ Своє місто",
         "btn_done": "✅ Готово",
         "after_initial": (
-            "👆 Це були останні актуальні вакансії за сьогодні.\n\n"
+            "👆 Це були останні актуальные вакансії за сьогодні.\n\n"
             "🔄 Тепер бот надсилатиме лише нові вакансії щойно вони з'являться."
         ),
+        "search_paused": (
+            "⏸ <b>Пошук тимчасово призупинено</b>\n\n"
+            "Ти користуєшся пошуком вже 3 дні. Щоб бот продовжував надсилати "
+            "тобі свіжі вакансії безкоштовно, підтвердь, що ти досі шукаєш роботу! 👇"
+        ),
+        "btn_continue": "🔄 Продовжити пошук",
+        "search_renewed": "🟢 Чудово! Пошук успішно відновлено ще на 3 дні. Свіжі вакансії вже летять до тебе! 🚀",
     },
 }
 
@@ -381,6 +402,15 @@ def is_delivery_job(job):
     return any(kw in text for kw in BLOCKED_KEYWORDS)
 
 
+def is_night_time() -> bool:
+    """Определяет, ночь ли в Польше (23:00 - 08:00)"""
+    now_utc = datetime.now(timezone.utc)
+    month = now_utc.month
+    offset_hours = 2 if 3 < month < 11 else 1
+    local_time = now_utc + timedelta(hours=offset_hours)
+    return local_time.hour >= 23 or local_time.hour < 8
+
+
 # ==================== DATABASE ====================
 
 def db_upsert_user(tid, username=None):
@@ -410,8 +440,17 @@ def db_set_user_active(tid, a):
 
 def db_upsert_filter(tid, city, ef, ep, umowa):
     try:
+        now_str = datetime.now(timezone.utc).isoformat()
         supabase.table("user_filters").upsert(
-            {"telegram_id": tid, "city": city, "etat_full": ef, "etat_part": ep, "umowa": umowa},
+            {
+                "telegram_id": tid,
+                "city": city,
+                "etat_full": ef,
+                "etat_part": ep,
+                "umowa": umowa,
+                "is_paused": False,
+                "last_renewal": now_str
+            },
             on_conflict="telegram_id"
         ).execute()
     except Exception as e:
@@ -464,12 +503,33 @@ def db_clear_sent(tid):
         pass
 
 
+def db_renew_search_filter(tid):
+    """Сбрасывает паузу и обновляет таймер на 3 дня"""
+    try:
+        now_str = datetime.now(timezone.utc).isoformat()
+        supabase.table("user_filters").update({
+            "is_paused": False,
+            "last_renewal": now_str
+        }).eq("telegram_id", tid).execute()
+        return True
+    except Exception as e:
+        logger.error(f"db_renew_search_filter: {e}")
+        return False
+
+
+def db_pause_search_filter(tid):
+    """Ставит поиск на паузу"""
+    try:
+        supabase.table("user_filters").update({
+            "is_paused": True
+        }).eq("telegram_id", tid).execute()
+        return True
+    except Exception as e:
+        logger.error(f"db_pause_search_filter: {e}")
+        return False
+
+
 def db_get_jobs_for_city(city, limit=150, hours=24):
-    """
-    Берём только свежие вакансии за последние N часов.
-    При первом старте — за 24 часа.
-    При плановой рассылке — за последние 20 минут.
-    """
     try:
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
@@ -524,7 +584,6 @@ async def trigger_scraper_for_city(city: str) -> bool:
 
 
 async def wait_for_city_jobs(city: str, attempts: int = 10, delay: int = 6):
-    """Ждём пока scraper соберёт вакансии — до 60 сек"""
     for i in range(attempts):
         await asyncio.sleep(delay)
         jobs = db_get_jobs_for_city(city, limit=150, hours=1)
@@ -629,7 +688,6 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
 
     logger.info(f"Sent={sent} filtered={sf} already={ss} blocked={blocked}")
 
-    # Сообщение после первых 8 вакансий
     if is_initial:
         lang = get_user_lang(tid)
         if sent > 0:
@@ -702,6 +760,12 @@ def kb_stopped_menu():
         keyboard=[[KeyboardButton(text=BTN_RESTART)]],
         resize_keyboard=True
     )
+
+
+def kb_renew_search(lang):
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=t(lang, "btn_continue"), callback_data="renew_search")
+    ]])
 
 
 # ==================== HANDLERS ====================
@@ -866,21 +930,31 @@ async def on_umowa(c: CallbackQuery, state: FSMContext):
     await send_promo(c.from_user.id)
     await asyncio.sleep(1)
 
-    # Берём свежие вакансии за последние 24 часа
     jobs = db_get_jobs_for_city(city, limit=150, hours=24)
 
-    # Если нет в базе — пробуем дёрнуть GitHub Actions
     if not jobs and city != "all":
         await bot.send_message(c.from_user.id, t(lang, "loading_city"))
         ok = await trigger_scraper_for_city(city)
         if ok:
             jobs = await wait_for_city_jobs(city)
 
-    # Отправляем первые 8 вакансий
     await send_jobs_to_user(
         c.from_user.id, jobs,
         user_filter=uf, limit=8, is_initial=True
     )
+
+
+@router.callback_query(F.data == "renew_search")
+async def on_renew_search(c: CallbackQuery):
+    tid = c.from_user.id
+    lang = get_user_lang(tid)
+    
+    ok = db_renew_search_filter(tid)
+    if ok:
+        await c.message.edit_text(t(lang, "search_renewed"), parse_mode="HTML")
+    else:
+        await c.answer("Error. Try again.", show_alert=True)
+    await c.answer()
 
 
 # ==================== SCHEDULER ====================
@@ -890,19 +964,65 @@ async def scheduled_check():
     Каждые 15 минут проверяем новые вакансии в базе.
     Берём только то, что появилось за последние 20 минут.
     """
-    logger.info("⏰ Check")
+    # Если ночь — пропускаем проверку вообще для экономии базы
+    if is_night_time():
+        logger.info("🌙 Night time — skipping scheduled check.")
+        return
+
+    logger.info("⏰ Check started")
     filters = db_get_all_filters()
     if not filters:
         return
 
-    cities = list(set(f.get("city", "all") for f in filters))
+    now = datetime.now(timezone.utc)
+    active_filters = []
+
+    for f in filters:
+        tid = f["telegram_id"]
+        lang = get_user_lang(tid)
+
+        # 1. Проверяем, стоит ли уже на паузе
+        if f.get("is_paused", False):
+            continue
+
+        # 2. Проверяем время жизни подписки (3 дня)
+        last_renewal_str = f.get("last_renewal")
+        if last_renewal_str:
+            try:
+                # Парсим дату в UTC
+                last_renewal = datetime.fromisoformat(last_renewal_str.replace("Z", "+00:00"))
+                # Если прошло больше 3 дней (72 часов)
+                if (now - last_renewal).total_seconds() > 259200: # 3 суток
+                    db_pause_search_filter(tid)
+                    try:
+                        # Посылаем юзеру уведомление с инлайн кнопкой
+                        await bot.send_message(
+                            tid, 
+                            t(lang, "search_paused"), 
+                            parse_mode="HTML", 
+                            reply_markup=kb_renew_search(lang)
+                        )
+                        logger.info(f"⏸ Paused user {tid} due to 3-day inactivity.")
+                    except Exception as e:
+                        logger.error(f"Failed to send pause notification to {tid}: {e}")
+                    continue
+            except Exception as e:
+                logger.error(f"Error parsing last_renewal for {tid}: {e}")
+
+        active_filters.append(f)
+
+    if not active_filters:
+        return
+
+    # Собираем уникальные города только у активных (не заблокированных) пользователей
+    cities = list(set(f.get("city", "all") for f in active_filters))
     city_jobs = {}
     for city in cities:
-        # Только свежак за последние 20 минут
+        # Свежие вакансии за последние 20 минут
         city_jobs[city] = db_get_jobs_for_city(city, limit=100, hours=0.35)
         await asyncio.sleep(0.5)
 
-    for f in filters:
+    for f in active_filters:
         tid = f["telegram_id"]
         city = f.get("city", "all")
         jobs = city_jobs.get(city, [])
@@ -913,7 +1033,8 @@ async def scheduled_check():
         }
         if jobs:
             sent = await send_jobs_to_user(tid, jobs, user_filter=uf, limit=15)
-            logger.info(f"Sent {sent} to {tid}")
+            if sent > 0:
+                logger.info(f"Sent {sent} to {tid}")
 
     logger.info("✅ Done")
 
