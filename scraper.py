@@ -42,7 +42,7 @@ CITY_SLUGS = {
     "szczecin": "szczecin", "bydgoszcz": "bydgoszcz",
     "białystok": "bialystok", "bialystok": "bialystok",
     "gdynia": "gdynia",
-    "częstochowa": "czestochowa", "czestochowa": "czestochowa",
+    "częstochowa": "czestochowa", "częstochowa": "czestochowa",
     "sosnowiec": "sosnowiec",
     "rzeszów": "rzeszow", "rzeszow": "rzeszow",
     "kielce": "kielce", "gliwice": "gliwice",
@@ -54,10 +54,7 @@ CITY_SLUGS = {
 
 
 def is_night_time() -> bool:
-    """
-    Определяет, ночь ли сейчас в Польше (с 23:00 до 08:00).
-    Учитывает переход на летнее/зимнее время (UTC+1 / UTC+2).
-    """
+    """Определяет, ночь ли сейчас в Польше (с 23:00 до 08:00)"""
     now_utc = datetime.now(timezone.utc)
     month = now_utc.month
     offset_hours = 2 if 3 < month < 11 else 1
@@ -157,15 +154,34 @@ def fetch_url(url: str):
     return r.status_code, r.text
 
 
-def job_exists_in_db(ext_id: str) -> bool:
+# ==================== ОПТИМИЗАЦИЯ ТРАФИКА (EGRESS FIX) ====================
+
+def get_all_existing_ids() -> set:
+    """
+    Загружает ВСЕ существующие external_id из базы ОДНИМ запросом в начале работы.
+    Это предотвращает тысячи мелких запросов к базе.
+    """
     try:
-        r = supabase.table("jobs").select("id").eq(
-            "external_id", ext_id
-        ).limit(1).execute()
-        return bool(r.data)
+        existing = set()
+        page_size = 1000
+        offset = 0
+        while True:
+            # Тянем только поле external_id, чтобы не гонять лишний трафик
+            r = supabase.table("jobs").select("external_id") \
+                .range(offset, offset + page_size - 1).execute()
+            if not r.data:
+                break
+            for row in r.data:
+                if row.get("external_id"):
+                    existing.add(row["external_id"])
+            if len(r.data) < page_size:
+                break
+            offset += page_size
+        logger.info(f"📦 Loaded {len(existing)} existing job IDs from database.")
+        return existing
     except Exception as e:
-        logger.error(f"job_exists_in_db: {e}")
-        return False
+        logger.error(f"get_all_existing_ids error: {e}")
+        return set()
 
 
 def db_insert_job(ext_id, title, city, salary, url, source,
@@ -187,10 +203,7 @@ def db_insert_job(ext_id, title, city, salary, url, source,
         ).execute()
         if r.data:
             return r.data[0]["id"]
-        r2 = supabase.table("jobs").select("id").eq(
-            "external_id", ext_id
-        ).execute()
-        return r2.data[0]["id"] if r2.data else None
+        return True
     except Exception as e:
         logger.error(f"db_insert_job: {e}")
     return None
@@ -253,7 +266,7 @@ async def fetch_olx_details(url):
         return {}
 
 
-async def parse_olx(city: str):
+async def parse_olx(city: str, existing_ids: set):
     saved = 0
     try:
         slug = get_city_slug(city)
@@ -317,8 +330,8 @@ async def parse_olx(city: str):
 
                 ext_id = hashlib.md5(f"olx_{link}".encode()).hexdigest()
 
-                # Ленивый парсинг — не лезем в карточку если уже есть
-                if job_exists_in_db(ext_id):
+                # Мгновенная проверка дубликата в памяти (0 трафика!)
+                if ext_id in existing_ids:
                     continue
 
                 salary = None
@@ -368,6 +381,7 @@ async def parse_olx(city: str):
                 )
                 if job_id:
                     saved += 1
+                    existing_ids.add(ext_id)  # Запоминаем, чтобы не вставить повторно за этот же запуск
 
                 await asyncio.sleep(0.3)
 
@@ -384,7 +398,7 @@ async def parse_olx(city: str):
 
 # ==================== PRACA.PL ====================
 
-async def parse_praca_pl(city: str):
+async def parse_praca_pl(city: str, existing_ids: set):
     saved = 0
     try:
         url = f"https://www.praca.pl/m-{get_city_slug(city)}_d-1.html?m={city}"
@@ -413,6 +427,10 @@ async def parse_praca_pl(city: str):
                     link = "https://www.praca.pl" + link
 
                 ext_id = hashlib.md5(f"pracapl_{link}".encode()).hexdigest()
+
+                # Мгновенная проверка дубликата в памяти (0 трафика!)
+                if ext_id in existing_ids:
+                    continue
 
                 job_city = city
                 loc_el = card.select_one("span.listing__location-name")
@@ -462,6 +480,7 @@ async def parse_praca_pl(city: str):
                 )
                 if job_id:
                     saved += 1
+                    existing_ids.add(ext_id)
 
             except Exception as e:
                 logger.error(f"Praca.pl item: {e}")
@@ -476,7 +495,7 @@ async def parse_praca_pl(city: str):
 
 # ==================== GOWORK ====================
 
-async def parse_gowork(city: str):
+async def parse_gowork(city: str, existing_ids: set):
     saved = 0
     try:
         slug = get_city_slug(city)
@@ -506,6 +525,10 @@ async def parse_gowork(city: str):
                     link = "https://www.gowork.pl" + link
 
                 ext_id = hashlib.md5(f"gowork_{link}".encode()).hexdigest()
+
+                # Мгновенная проверка дубликата в памяти (0 трафика!)
+                if ext_id in existing_ids:
+                    continue
 
                 job_city = city
                 loc_el = card.select_one(".g-job-location")
@@ -547,6 +570,7 @@ async def parse_gowork(city: str):
                 )
                 if job_id:
                     saved += 1
+                    existing_ids.add(ext_id)
 
             except Exception as e:
                 logger.error(f"GoWork item: {e}")
@@ -571,7 +595,20 @@ async def main():
         logger.info("🌙 Night sleep mode active (23:00 - 08:00 Warsaw time). Skipping scheduled scan.")
         sys.exit(0)
 
-    cleanup_old_jobs()
+    # Очистка базы: запускается ТОЛЬКО один раз в день (в утреннем запуске между 08:00 и 08:35)
+    # Это экономит 31 ненужный запрос очистки в день!
+    now_utc = datetime.now(timezone.utc)
+    month = now_utc.month
+    offset_hours = 2 if 3 < month < 11 else 1
+    local_time = now_utc + timedelta(hours=offset_hours)
+    
+    if not args.city and local_time.hour == 8 and local_time.minute < 35:
+        cleanup_old_jobs()
+    else:
+        logger.info("⏭ Cleanup skipped (runs once a day at 08:00 AM Warsaw time).")
+
+    # ЗАГРУЖАЕМ ВСЕ СУЩЕСТВУЮЩИЕ ID ИЗ БАЗЫ ОДНИМ ПАКЕТОМ
+    existing_ids = get_all_existing_ids()
 
     if args.city:
         cities = [args.city]
@@ -584,11 +621,11 @@ async def main():
     for city in cities:
         logger.info(f"=== {city} ===")
         try:
-            n1 = await parse_olx(city)
+            n1 = await parse_olx(city, existing_ids)
             await asyncio.sleep(2)
-            n2 = await parse_praca_pl(city)
+            n2 = await parse_praca_pl(city, existing_ids)
             await asyncio.sleep(2)
-            n3 = await parse_gowork(city)
+            n3 = await parse_gowork(city, existing_ids)
             await asyncio.sleep(2)
             total += n1 + n2 + n3
             logger.info(f"City {city}: OLX={n1} Praca={n2} GoWork={n3}")
