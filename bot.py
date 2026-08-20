@@ -110,7 +110,7 @@ UMOWY = [
     ("Umowa zlecenie", "umowa_zlecenie"),
     ("Umowa o dzieło", "umowa_o_dzielo"),
     ("B2B", "b2b"),
-    ("Staż / Praktyki", "staz"),
+    ("Staż / Praktyки", "staz"),
 ]
 
 UMOWA_DISPLAY = {
@@ -425,7 +425,7 @@ def db_upsert_user(tid, username=None):
 
 def db_get_user(tid):
     try:
-        r = supabase.table("users").select("*").eq("telegram_id", tid).execute()
+        r = supabase.table("users").select("telegram_id, language, is_active").eq("telegram_id", tid).execute()
         return r.data[0] if r.data else None
     except:
         return None
@@ -466,27 +466,39 @@ def db_delete_filter(tid):
 
 def db_get_filter(tid):
     try:
-        r = supabase.table("user_filters").select("*").eq("telegram_id", tid).execute()
+        r = supabase.table("user_filters").select("telegram_id, city, umowa, etat_full, etat_part, is_paused, last_renewal").eq("telegram_id", tid).execute()
         return r.data[0] if r.data else None
     except:
         return None
 
 
-def db_get_all_filters():
+def db_get_active_filters():
+    """
+    Тянет ТОЛЬКО активные фильтры пользователей (не заблокированные).
+    Это сильно экономит ресурсы, так как мертвых юзеров мы не сканируем.
+    """
     try:
-        r = supabase.table("user_filters").select("*").execute()
+        r = supabase.table("user_filters") \
+            .select("telegram_id, city, umowa, etat_full, etat_part, is_paused, last_renewal") \
+            .eq("is_paused", False).execute()
         return r.data or []
     except:
         return []
 
 
-def db_already_sent(tid, jid):
+# ==================== ОПТИМИЗАЦИЯ СТАТУСА ОТПРАВКИ (EGRESS FIX) ====================
+
+def db_get_sent_job_ids(tid) -> set:
+    """
+    Загружает все отправленные вакансии для конкретного пользователя ОДНИМ запросом.
+    Больше никаких мелких поштучных обращений к базе в цикле!
+    """
     try:
-        r = supabase.table("sent_jobs").select("id").eq(
-            "telegram_id", tid).eq("job_id", jid).execute()
-        return bool(r.data)
-    except:
-        return False
+        r = supabase.table("sent_jobs").select("job_id").eq("telegram_id", tid).execute()
+        return {row["job_id"] for row in r.data} if r.data else set()
+    except Exception as e:
+        logger.error(f"db_get_sent_job_ids error for {tid}: {e}")
+        return set()
 
 
 def db_mark_sent(tid, jid):
@@ -504,7 +516,6 @@ def db_clear_sent(tid):
 
 
 def db_renew_search_filter(tid):
-    """Сбрасывает паузу и обновляет таймер на 3 дня"""
     try:
         now_str = datetime.now(timezone.utc).isoformat()
         supabase.table("user_filters").update({
@@ -518,7 +529,6 @@ def db_renew_search_filter(tid):
 
 
 def db_pause_search_filter(tid):
-    """Ставит поиск на паузу"""
     try:
         supabase.table("user_filters").update({
             "is_paused": True
@@ -530,17 +540,22 @@ def db_pause_search_filter(tid):
 
 
 def db_get_jobs_for_city(city, limit=150, hours=24):
+    """
+    Запрашивает из базы только те поля, которые выводятся юзеру в сообщении.
+    Исключает скачивание тяжелых служебных полей PostgreSQL.
+    """
     try:
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        fields = "id, external_id, title, city, salary, url, source, umowa, etat, company"
 
         if city == "all":
-            r = supabase.table("jobs").select("*") \
+            r = supabase.table("jobs").select(fields) \
                 .gt("created_at", cutoff) \
                 .order("created_at", desc=True) \
                 .limit(limit).execute()
             return r.data or []
 
-        r = supabase.table("jobs").select("*") \
+        r = supabase.table("jobs").select(fields) \
             .ilike("city", f"%{city}%") \
             .gt("created_at", cutoff) \
             .order("created_at", desc=True) \
@@ -550,6 +565,8 @@ def db_get_jobs_for_city(city, limit=150, hours=24):
         logger.error(f"db_get_jobs_for_city: {e}")
         return []
 
+
+# ... ОСТАВШАЯСЯ ЧАСТЬ КОДА БОТА (Trigger, Web Server, Format) БЕЗ ИЗМЕНЕНИЙ ...
 
 # ==================== GITHUB ACTIONS TRIGGER ====================
 
@@ -661,6 +678,9 @@ async def send_promo(chat_id):
 async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=False):
     sent, sf, ss, blocked = 0, 0, 0, 0
 
+    # Оптимизация: загружаем все отправленные вакансии для этого юзера в память ОДНИМ запросом
+    already_sent_ids = db_get_sent_job_ids(tid)
+
     for job in jobs:
         if sent >= limit:
             break
@@ -670,7 +690,8 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
         if user_filter and not job_matches_filter(job, user_filter):
             sf += 1
             continue
-        if db_already_sent(tid, job['id']):
+        # Сравнение происходит мгновенно в оперативной памяти сервера (0 трафика к Supabase)
+        if job['id'] in already_sent_ids:
             ss += 1
             continue
         try:
@@ -961,17 +982,19 @@ async def on_renew_search(c: CallbackQuery):
 
 async def scheduled_check():
     """
-    Каждые 15 минут проверяем новые вакансии в базе.
-    Берём только то, что появилось за последние 20 минут.
+    Каждые 15 минут проверяет новые вакансии в базе.
     """
-    # Если ночь — пропускаем проверку вообще для экономии базы
+    # Если ночь — пропускаем проверку вообще для экономии трафика и запросов к базе
     if is_night_time():
         logger.info("🌙 Night time — skipping scheduled check.")
         return
 
     logger.info("⏰ Check started")
-    filters = db_get_all_filters()
+    
+    # Оптимизация: Берем только активных юзеров, не стоящих на паузе
+    filters = db_get_active_filters()
     if not filters:
+        logger.info("No active filters found.")
         return
 
     now = datetime.now(timezone.utc)
@@ -981,21 +1004,15 @@ async def scheduled_check():
         tid = f["telegram_id"]
         lang = get_user_lang(tid)
 
-        # 1. Проверяем, стоит ли уже на паузе
-        if f.get("is_paused", False):
-            continue
-
-        # 2. Проверяем время жизни подписки (3 дня)
+        # Проверяем время жизни подписки (3 дня)
         last_renewal_str = f.get("last_renewal")
         if last_renewal_str:
             try:
-                # Парсим дату в UTC
                 last_renewal = datetime.fromisoformat(last_renewal_str.replace("Z", "+00:00"))
                 # Если прошло больше 3 дней (72 часов)
-                if (now - last_renewal).total_seconds() > 259200: # 3 суток
+                if (now - last_renewal).total_seconds() > 259200:
                     db_pause_search_filter(tid)
                     try:
-                        # Посылаем юзеру уведомление с инлайн кнопкой
                         await bot.send_message(
                             tid, 
                             t(lang, "search_paused"), 
@@ -1014,11 +1031,11 @@ async def scheduled_check():
     if not active_filters:
         return
 
-    # Собираем уникальные города только у активных (не заблокированных) пользователей
+    # Собираем уникальные города только у активных
     cities = list(set(f.get("city", "all") for f in active_filters))
     city_jobs = {}
     for city in cities:
-        # Свежие вакансии за последние 20 минут
+        # Свежак за последние 20 минут
         city_jobs[city] = db_get_jobs_for_city(city, limit=100, hours=0.35)
         await asyncio.sleep(0.5)
 
