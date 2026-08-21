@@ -46,8 +46,8 @@ REF_LINK = "https://panel.city-drive.pl/ref/PracaBOT"
 DONATE_ACCOUNT = "84 9511 0000 0052 9681 3000 0010"
 
 PROMO_TEXT = (
-    "💼 <b>Ищешь подработку с гибким графиком в Польше?</b>\n\n"
-    "Подключайся к доставке через <b>City Drive</b> и выходи на заказы в "
+    "💼 <b>Ищешь подработку с гибким графиком in Польше?</b>\n\n"
+    "Подключайся к доставке через <b>City Drive</b> и выходи на заказы in "
     "<b>Glovo / Uber Eats / Bolt Food</b>.\n\n"
     "Что по условиям:\n"
     "• свободный график — можно совмещать с учёбой или основной работой\n"
@@ -122,7 +122,7 @@ UMOWY = [
     ("Staż / Praktyки", "staz"),
 ]
 
-UMOWA_DISPLAY = {
+UMOWY_DISPLAY = {
     "umowa_o_prace": "Umowa o pracę",
     "umowa_zlecenie": "Umowa zlecenie",
     "umowa_o_dzielo": "Umowa o dzieło",
@@ -291,7 +291,7 @@ TEXTS = {
         "search_paused": (
             "⏸ <b>Пошук тимчасово призупинено</b>\n\n"
             "Ти користуєшся пошуком вже 3 дні. Щоб бот продовжував надсилати "
-            "тобі свіжі вакансії безкоштовно, підтвердь, що ти досі шукаєш роботу! 👇"
+            "тобі свежие вакансії безкоштовно, підтвердь, що ти досі шукаєш роботу! 👇"
         ),
         "btn_continue": "🔄 Продовжити пошук",
         "search_renewed": "🟢 Чудово! Пошук успішно відновлено ще на 3 дні. Свіжі вакансії вже летять до тебе! 🚀",
@@ -802,8 +802,7 @@ async def run_broadcast(bot: Bot, admin_id: int, from_chat_id: int, message_id: 
     
     for uid in users:
         try:
-            # Телеграм просит не слать в ЛС больше 30 сообщений в секунду
-            # Наша задержка 0.05 сек — это гарантированная защита от Flood лимитов
+            # Наша микрозадержка 0.05 сек — это гарантированная защита от Flood лимитов
             await bot.copy_message(
                 chat_id=uid,
                 from_chat_id=from_chat_id,
@@ -863,55 +862,73 @@ async def admin_cancel(c: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.waiting_for_ad, F.from_user.id == ADMIN_ID)
 async def admin_get_ad(m: Message, state: FSMContext):
-    # Сохраняем ID сообщения и чат для последующего копирования
-    await state.update_data(ad_msg_id=m.message_id, ad_chat_id=m.chat_id)
-    await state.set_state(AdminStates.confirm_ad)
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 Начать рассылку", callback_data="admin_send")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel")]
-    ])
-    
-    await m.answer("👇 <b>Вот как твой пост будет выглядеть у пользователей:</b>")
-    # Демонстрируем админу точную копию его поста
-    await m.copy_to(chat_id=m.chat_id)
-    await m.answer(
-        "Если всё выглядит правильно, нажми кнопку ниже, чтобы запустить массовую отправку.",
-        parse_mode="HTML",
-        reply_markup=kb
-    )
+    try:
+        # Логируем, что мы вошли в обработчик
+        logger.info(f"Admin triggered ad preview for message_id {m.message_id}")
+        
+        # Сохраняем ID сообщения и чат для последующего копирования
+        await state.update_data(ad_msg_id=m.message_id, ad_chat_id=m.chat_id)
+        await state.set_state(AdminStates.confirm_ad)
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🚀 Начать рассылку", callback_data="admin_send")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel")]
+        ])
+        
+        await m.answer("👇 <b>Вот как твой пост будет выглядеть у пользователей:</b>")
+        
+        # Используем безопасный прямой вызов bot.copy_message
+        await bot.copy_message(
+            chat_id=m.chat_id,
+            from_chat_id=m.chat_id,
+            message_id=m.message_id
+        )
+        
+        await m.answer(
+            "Если всё выглядит правильно, нажми кнопку ниже, чтобы запустить массовую отправку.",
+            parse_mode="HTML",
+            reply_markup=kb
+        )
+    except Exception as e:
+        logger.error(f"Error in admin_get_ad handler: {e}")
+        await m.answer(f"❌ Произошла ошибка при генерации превью: {e}")
 
 
 @router.callback_query(AdminStates.confirm_ad, F.data == "admin_send", F.from_user.id == ADMIN_ID)
 async def admin_send_ad(c: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    msg_id = data.get("ad_msg_id")
-    chat_id = data.get("ad_chat_id")
-    await state.clear()
-    
-    if not msg_id or not chat_id:
-        await c.message.edit_text("❌ Произошла ошибка. Пожалуйста, введи /admin заново.")
+    try:
+        data = await state.get_data()
+        msg_id = data.get("ad_msg_id")
+        chat_id = data.get("ad_chat_id")
+        await state.clear()
+        
+        if not msg_id or not chat_id:
+            await c.message.edit_text("❌ Произошла ошибка (сообщение не найдено в кэше). Пожалуйста, введи /admin заново.")
+            await c.answer()
+            return
+            
+        await c.message.edit_text("⏳ Считываю список активных пользователей из базы данных...")
         await c.answer()
-        return
         
-    await c.message.edit_text("⏳ Считываю список активных пользователей из базы данных...")
-    await c.answer()
-    
-    users = db_get_all_active_users()
-    
-    if not users:
-        await c.message.answer("❌ В базе данных нет ни одного активного пользователя!")
-        return
+        users = db_get_all_active_users()
         
-    await c.message.answer(
-        f"🚀 Массовая рассылка для <b>{len(users)}</b> пользователей успешно запущена "
-        f"в фоновом режиме.\n\nБот продолжит бесперебойно работать, "
-        f"а я напишу тебе сюда сразу же по завершении отправки!",
-        parse_mode="HTML"
-    )
-    
-    # Запускаем фоновую асинхронную задачу, чтобы сам бот не завис
-    asyncio.create_task(run_broadcast(bot, ADMIN_ID, chat_id, msg_id, users))
+        if not users:
+            await c.message.answer("❌ В базе данных нет ни одного активного пользователя!")
+            return
+            
+        await c.message.answer(
+            f"🚀 Массовая рассылка для <b>{len(users)}</b> пользователей успешно запущена "
+            f"в фоновом режиме.\n\nБот продолжит бесперебойно работать, "
+            f"а я напишу тебе сюда сразу же по завершении отправки!",
+            parse_mode="HTML"
+        )
+        
+        # Запускаем фоновую асинхронную задачу, чтобы сам бот не завис
+        asyncio.create_task(run_broadcast(bot, ADMIN_ID, chat_id, msg_id, users))
+        
+    except Exception as e:
+        logger.error(f"Error in admin_send_ad callback: {e}")
+        await c.message.answer(f"❌ Ошибка запуска рассылки: {e}")
 
 
 # --- СТАНДАРТНЫЕ ХЕНДЛЕРЫ ПОЛЬЗОВАТЕЛЕЙ ---
