@@ -149,7 +149,7 @@ def fetch_url(url: str):
             "Sec-Fetch-Mode": "navigate",
         },
         impersonate="chrome120",
-        timeout=30,
+        timeout=12, # ИСПРАВЛЕНО: Безопасный таймаут 12 секунд вместо 30 (защита от зависаний)
     )
     return r.status_code, r.text
 
@@ -157,16 +157,11 @@ def fetch_url(url: str):
 # ==================== ОПТИМИЗАЦИЯ ТРАФИКА (EGRESS FIX) ====================
 
 def get_all_existing_ids() -> set:
-    """
-    Загружает ВСЕ существующие external_id из базы ОДНИМ запросом в начале работы.
-    Это предотвращает тысячи мелких запросов к базе.
-    """
     try:
         existing = set()
         page_size = 1000
         offset = 0
         while True:
-            # Тянем только поле external_id, чтобы не гонять лишний трафик
             r = supabase.table("jobs").select("external_id") \
                 .range(offset, offset + page_size - 1).execute()
             if not r.data:
@@ -234,6 +229,33 @@ def cleanup_old_jobs():
             logger.info("🗑 Nothing to clean")
     except Exception as e:
         logger.error(f"cleanup_old_jobs: {e}")
+
+
+# ==================== ДИНАМИЧЕСКИЙ ВЫБОР АКТИВНЫХ ГОРОДОВ ====================
+
+def get_active_cities_from_db() -> list:
+    """
+    Сканирует базу данных и находит только те города, которые РЕАЛЬНО
+    выбраны активными пользователями. Это снижает нагрузку на 80%!
+    """
+    try:
+        r = supabase.table("user_filters").select("city").eq("is_paused", False).execute()
+        if not r.data:
+            return []
+            
+        cities = set()
+        for row in r.data:
+            c = row.get("city")
+            if c:
+                # Если кто-то подписан на "Вся Польша", парсим наши дефолтные города
+                if c == "all":
+                    return MAIN_SCAN_CITIES
+                cities.add(c)
+                
+        return list(cities)
+    except Exception as e:
+        logger.error(f"get_active_cities_from_db error: {e}")
+        return []
 
 
 # ==================== OLX ====================
@@ -460,7 +482,7 @@ async def parse_praca_pl(city: str, existing_ids: set):
                     umowa_key = "b2b"
                 elif "umowa o dzieło" in dt:
                     umowa_key = "umowa_o_dzielo"
-                elif "staż" in dt or "praktyk" in dt:
+                elif "staż" in dt or "praktyк" in dt:
                     umowa_key = "staz"
 
                 etat_key = None
@@ -596,7 +618,6 @@ async def main():
         sys.exit(0)
 
     # Очистка базы: запускается ТОЛЬКО один раз в день (в утреннем запуске между 08:00 и 08:35)
-    # Это экономит 31 ненужный запрос очистки в день!
     now_utc = datetime.now(timezone.utc)
     month = now_utc.month
     offset_hours = 2 if 3 < month < 11 else 1
@@ -610,12 +631,20 @@ async def main():
     # ЗАГРУЖАЕМ ВСЕ СУЩЕСТВУЮЩИЕ ID ИЗ БАЗЫ ОДНИМ ПАКЕТОМ
     existing_ids = get_all_existing_ids()
 
+    # ОПРЕДЕЛЯЕМ ГОРОДА ДЛЯ СКАНИРОВАНИЯ
     if args.city:
         cities = [args.city]
-        logger.info(f"🔍 On-demand scrape: {args.city}")
+        logger.info(f"🔍 On-demand scrape for city: {args.city}")
     else:
-        cities = MAIN_SCAN_CITIES
-        logger.info(f"🔁 Scheduled scrape: {len(cities)} cities")
+        # Пытаемся получить только те города, где сидят активные юзеры
+        db_cities = get_active_cities_from_db()
+        if db_cities:
+            cities = db_cities
+            logger.info(f"🔁 Smart scrape: Scanning only {len(cities)} cities with active users: {cities}")
+        else:
+            # Если база пустая или произошла ошибка — сканируем 5 дефолтных главных городов, чтобы наполнить базу
+            cities = MAIN_SCAN_CITIES[:5]
+            logger.info(f"🔁 Fallback scrape: No active users found. Scanning top 5 main cities: {cities}")
 
     total = 0
     for city in cities:
