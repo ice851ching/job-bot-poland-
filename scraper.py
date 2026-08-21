@@ -6,7 +6,7 @@ import logging
 import json
 import re
 import argparse
-import random  # Добавлено для случайных пауз (защита от банов)
+import random
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -104,7 +104,7 @@ def normalize_umowa(umowa):
         return "b2b"
     if "dzieło" in u or "dzielo" in u:
         return "umowa_o_dzielo"
-    if "staż" in u or "staz" in u or "praktyк" in u:
+    if "staż" in u or "staz" in u or "praktyk" in u:
         return "staz"
     return None
 
@@ -150,12 +150,10 @@ def fetch_url(url: str):
             "Sec-Fetch-Mode": "navigate",
         },
         impersonate="chrome120",
-        timeout=15, # Золотая середина: 15 секунд таймаута (не виснет долго, но успевает загрузиться)
+        timeout=15, # Надежный таймаут 15 секунд
     )
     return r.status_code, r.text
 
-
-# ==================== ОПТИМИЗАЦИЯ ТРАФИКА (EGRESS FIX) ====================
 
 def get_all_existing_ids() -> set:
     try:
@@ -226,19 +224,11 @@ def cleanup_old_jobs():
                 "created_at", cutoff
             ).execute()
             logger.info(f"✅ Cleaned {len(old_ids)} old jobs")
-        else:
-            logger.info("🗑 Nothing to clean")
     except Exception as e:
         logger.error(f"cleanup_old_jobs: {e}")
 
 
-# ==================== ДИНАМИЧЕСКИЙ ВЫБОР АКТИВНЫХ ГОРОДОВ ====================
-
 def get_active_cities_from_db() -> list:
-    """
-    Сканирует базу данных и находит только те города, которые РЕАЛЬНО
-    выбраны активными пользователями. Это бережет ресурсы на 80%.
-    """
     try:
         r = supabase.table("user_filters").select("city").eq("is_paused", False).execute()
         if not r.data:
@@ -258,7 +248,7 @@ def get_active_cities_from_db() -> list:
         return []
 
 
-# ==================== OLX ====================
+# ==================== OLX (АСИНХРОННЫЙ ГЛУБОКИЙ ПАРСИНГ) ====================
 
 def extract_olx_label(html, label):
     pattern = rf">{re.escape(label)}</p>.*?<p[^>]*>(.*?)</p>"
@@ -273,7 +263,7 @@ def extract_olx_label(html, label):
     return result if result else None
 
 
-async def fetch_olx_details(url):
+async def fetch_olx_details(url: str):
     try:
         status, html = await asyncio.to_thread(fetch_url, url)
         if status != 200:
@@ -288,8 +278,79 @@ async def fetch_olx_details(url):
         return {}
 
 
+async def process_single_olx_ad(item: dict, city: str, existing_ids: set, semaphore: asyncio.Semaphore) -> bool:
+    """Обрабатывает одно объявление OLX: асинхронно стягивает детали и пушит в базу"""
+    try:
+        title = strip_html(item.get("title") or "")
+        if not title:
+            return False
+
+        link = item.get("url") or ""
+        if not link:
+            sid, iid = item.get("slug", ""), item.get("id", "")
+            if sid and iid:
+                link = f"https://www.olx.pl/oferta/{sid}-ID{iid}.html"
+        if not link or not link.startswith("http"):
+            return False
+
+        ext_id = hashlib.md5(f"olx_{link}".encode()).hexdigest()
+
+        if ext_id in existing_ids:
+            return False
+
+        salary = None
+        sal = item.get("salary")
+        if sal:
+            salary = sal.get("displayValue") if isinstance(sal, dict) else str(sal)
+        if not salary:
+            price = item.get("price", {})
+            if isinstance(price, dict):
+                salary = price.get("displayValue")
+
+        location = item.get("location", {})
+        job_city = ""
+        if isinstance(location, dict):
+            cd = location.get("city", {})
+            job_city = cd.get("name", "") if isinstance(cd, dict) else (cd if isinstance(cd, str) else location.get("cityName", ""))
+
+        if city and job_city and not city_matches(job_city, city):
+            return False
+
+        # Ограничиваем количество одновременных глубоких запросов в OLX до 3,
+        # чтобы Cloudflare не забанил наш IP-адрес на Гитхабе
+        async with semaphore:
+            await asyncio.sleep(random.uniform(1.0, 2.5))  # Рандомная пауза (имитация человека)
+            details = await fetch_olx_details(link)
+
+        dc = details.get("city")
+        de = details.get("etat")
+        du = details.get("umowa")
+
+        if dc:
+            job_city = dc
+        if city and not city_matches(job_city, city):
+            return False
+
+        job_id = db_insert_job(
+            ext_id,
+            title,
+            strip_html(job_city or city),
+            strip_html(salary) if salary else None,
+            link,
+            "OLX",
+            umowa=normalize_umowa(du) if du else None,
+            etat=normalize_etat(de) if de else None,
+        )
+        if job_id:
+            existing_ids.add(ext_id)
+            return True
+            
+    except Exception as e:
+        logger.error(f"process_single_olx_ad error: {e}")
+    return False
+
+
 async def parse_olx(city: str, existing_ids: set):
-    saved = 0
     try:
         slug = get_city_slug(city)
         base = f"https://www.olx.pl/praca/{slug}/" if slug else "https://www.olx.pl/praca/"
@@ -298,32 +359,24 @@ async def parse_olx(city: str, existing_ids: set):
         status, html = await asyncio.to_thread(fetch_url, url)
         logger.info(f"OLX status={status} city={city}")
         if status != 200:
-            return saved
+            return 0
 
         data = None
-        m = re.search(
-            r'window\.__PRERENDERED_STATE__\s*=\s*"(.*?)";\s*(?:window|</script>)',
-            html, re.DOTALL
-        )
+        m = re.search(r'window\.__PRERENDERED_STATE__\s*=\s*"(.*?)";\s*(?:window|</script>)', html, re.DOTALL)
         if m:
             raw = m.group(1).replace('\\"', '"').replace('\\\\', '\\')
             try:
                 data = json.loads(raw)
             except Exception:
                 try:
-                    data = json.loads(
-                        m.group(1).encode().decode("unicode_escape")
-                    )
+                    data = json.loads(m.group(1).encode().decode("unicode_escape"))
                 except Exception:
                     pass
 
         if not data:
-            logger.warning(f"OLX no data city={city}")
-            return saved
+            return 0
 
-        listing = data.get("listing", {}).get(
-            "listing", data.get("listing", {})
-        )
+        listing = data.get("listing", {}).get("listing", data.get("listing", {}))
         ads = listing.get("ads", [])
         if not ads:
             for k in ["adverts", "data", "items"]:
@@ -332,91 +385,22 @@ async def parse_olx(city: str, existing_ids: set):
                     ads = v
                     break
 
-        logger.info(f"OLX ads={len(ads)} city={city}")
-
-        for item in ads[:30]:
-            try:
-                title = strip_html(item.get("title") or "")
-                if not title:
-                    continue
-
-                link = item.get("url") or ""
-                if not link:
-                    sid, iid = item.get("slug", ""), item.get("id", "")
-                    if sid and iid:
-                        link = f"https://www.olx.pl/oferta/{sid}-ID{iid}.html"
-                if not link:
-                    continue
-                if not link.startswith("http"):
-                    link = "https://www.olx.pl" + link
-
-                ext_id = hashlib.md5(f"olx_{link}".encode()).hexdigest()
-
-                # Мгновенная проверка дубликата в памяти (0 трафика!)
-                if ext_id in existing_ids:
-                    continue
-
-                salary = None
-                sal = item.get("salary")
-                if sal:
-                    salary = (
-                        sal.get("displayValue")
-                        if isinstance(sal, dict) else str(sal)
-                    )
-                if not salary:
-                    price = item.get("price", {})
-                    if isinstance(price, dict):
-                        salary = price.get("displayValue")
-
-                location = item.get("location", {})
-                job_city = ""
-                if isinstance(location, dict):
-                    cd = location.get("city", {})
-                    job_city = (
-                        cd.get("name", "") if isinstance(cd, dict)
-                        else (cd if isinstance(cd, str)
-                              else location.get("cityName", ""))
-                    )
-
-                if city and job_city and not city_matches(job_city, city):
-                    continue
-
-                details = await fetch_olx_details(link)
-                dc = details.get("city")
-                de = details.get("etat")
-                du = details.get("umowa")
-
-                if dc:
-                    job_city = dc
-                if city and not city_matches(job_city, city):
-                    continue
-
-                job_id = db_insert_job(
-                    ext_id,
-                    title,
-                    strip_html(job_city or city),
-                    strip_html(salary) if salary else None,
-                    link,
-                    "OLX",
-                    umowa=normalize_umowa(du) if du else None,
-                    etat=normalize_etat(de) if de else None,
-                )
-                if job_id:
-                    saved += 1
-                    existing_ids.add(ext_id)  # Запоминаем, чтобы не вставить повторно за этот же запуск
-
-                # Добавлен Jitter: случайная задержка от 1.0 до 3.0 секунд (эмуляция реального человека)
-                await asyncio.sleep(random.uniform(1.0, 3.0))
-
-            except Exception as e:
-                logger.error(f"OLX item: {e}")
-
+        # Ограничиваем глубокие запросы внутри ОЛХ до 3 параллельных задач
+        olx_sem = asyncio.Semaphore(3)
+        tasks = []
+        
+        # Берем до 15 свежих вакансий по каждому городу
+        for item in ads[:15]:
+            tasks.append(process_single_olx_ad(item, city, existing_ids, olx_sem))
+            
+        results = await asyncio.gather(*tasks)
+        saved = sum(1 for r in results if r)
+        
         logger.info(f"OLX saved={saved} city={city}")
-
+        return saved
     except Exception as e:
         logger.error(f"parse_olx({city}): {e}")
-
-    return saved
+    return 0
 
 
 # ==================== PRACA.PL ====================
@@ -432,9 +416,8 @@ async def parse_praca_pl(city: str, existing_ids: set):
 
         soup = BeautifulSoup(html, "html.parser")
         cards = soup.select("li.listing__item")
-        logger.info(f"Praca.pl cards={len(cards)} city={city}")
 
-        for card in cards[:40]:
+        for card in cards[:25]:
             try:
                 title_el = card.select_one("a.listing__title")
                 if not title_el:
@@ -444,14 +427,14 @@ async def parse_praca_pl(city: str, existing_ids: set):
                     continue
 
                 link = title_el.get("href", "").split("#")[0]
-                if not link:
-                    continue
-                if not link.startswith("http"):
-                    link = "https://www.praca.pl" + link
+                if not link or not link.startswith("http"):
+                    if link and not link.startswith("http"):
+                        link = "https://www.praca.pl" + link
+                    else:
+                        continue
 
                 ext_id = hashlib.md5(f"pracapl_{link}".encode()).hexdigest()
 
-                # Мгновенная проверка дубликата в памяти (0 трафика!)
                 if ext_id in existing_ids:
                     continue
 
@@ -469,32 +452,19 @@ async def parse_praca_pl(city: str, existing_ids: set):
                     continue
 
                 details_el = card.select_one("div.listing__main-details")
-                dt = (
-                    details_el.get_text(" ", strip=True).lower()
-                    if details_el else ""
-                )
+                dt = details_el.get_text(" ", strip=True).lower() if details_el else ""
 
                 umowa_key = None
-                if "umowa o pracę" in dt or "umowa o prace" in dt:
-                    umowa_key = "umowa_o_prace"
-                elif "umowa zlecenie" in dt:
-                    umowa_key = "umowa_zlecenie"
-                elif "kontrakt b2b" in dt or " b2b" in dt:
-                    umowa_key = "b2b"
-                elif "umowa o dzieło" in dt:
-                    umowa_key = "umowa_o_dzielo"
-                elif "staż" in dt or "praktyк" in dt:
-                    umowa_key = "staz"
+                if "umowa o pracę" in dt or "umowa o prace" in dt: umowa_key = "umowa_o_prace"
+                elif "umowa zlecenie" in dt: umowa_key = "umowa_zlecenie"
+                elif "kontrakt b2b" in dt or " b2b" in dt: umowa_key = "b2b"
+                elif "umowa o dzieło" in dt: umowa_key = "umowa_o_dzielo"
+                elif "staż" in dt or "praktyк" in dt: umowa_key = "staz"
 
                 etat_key = None
-                if any(x in dt for x in [
-                    "część etatu", "czesc etatu",
-                    "tymczasowa", "dodatkowa", "1/2"
-                ]):
+                if any(x in dt for x in ["część etatu", "czesc etatu", "tymczasowa", "dodatkowa", "1/2"]):
                     etat_key = "part"
-                elif any(x in dt for x in [
-                    "pełny etat", "pelny etat", "pełen etat"
-                ]):
+                elif any(x in dt for x in ["pełny etat", "pelny etat", "pełen etat"]):
                     etat_key = "full"
 
                 job_id = db_insert_job(
@@ -509,7 +479,6 @@ async def parse_praca_pl(city: str, existing_ids: set):
                 logger.error(f"Praca.pl item: {e}")
 
         logger.info(f"Praca.pl saved={saved} city={city}")
-
     except Exception as e:
         logger.error(f"parse_praca_pl({city}): {e}")
 
@@ -530,9 +499,8 @@ async def parse_gowork(city: str, existing_ids: set):
 
         soup = BeautifulSoup(html, "html.parser")
         cards = soup.select(".g-job-item")
-        logger.info(f"GoWork cards={len(cards)} city={city}")
 
-        for card in cards[:30]:
+        for card in cards[:25]:
             try:
                 title_el = card.select_one(".g-job-item__offer-title a")
                 if not title_el:
@@ -549,7 +517,6 @@ async def parse_gowork(city: str, existing_ids: set):
 
                 ext_id = hashlib.md5(f"gowork_{link}".encode()).hexdigest()
 
-                # Мгновенная проверка дубликата в памяти (0 трафика!)
                 if ext_id in existing_ids:
                     continue
 
@@ -572,20 +539,13 @@ async def parse_gowork(city: str, existing_ids: set):
                 for tag in card.select(".g-job-item-content__tag"):
                     for sp in tag.select("span"):
                         text = sp.get_text(strip=True).lower()
-                        if not text:
-                            continue
-                        if "zł" in text or "pln" in text:
-                            salary = strip_html(sp.get_text(strip=True))
-                        if "umowa o pracę" in text or "umowa o prace" in text:
-                            umowa_key = "umowa_o_prace"
-                        elif "zlecenie" in text:
-                            umowa_key = "umowa_zlecenie"
-                        elif "b2b" in text or "kontrakt" in text:
-                            umowa_key = "b2b"
-                        if "pełny etat" in text or "pelny etat" in text:
-                            etat_key = "full"
-                        elif "część etatu" in text or "niepełny" in text:
-                            etat_key = "part"
+                        if not text: continue
+                        if "zł" in text or "pln" in text: salary = strip_html(sp.get_text(strip=True))
+                        if "umowa o pracę" in text or "umowa o prace" in text: umowa_key = "umowa_o_prace"
+                        elif "zlecenie" in text: umowa_key = "umowa_zlecenie"
+                        elif "b2b" in text or "kontrakt" in text: umowa_key = "b2b"
+                        if "pełny etat" in text or "pelny etat" in text: etat_key = "full"
+                        elif "część etatu" in text or "niepełny" in text: etat_key = "part"
 
                 job_id = db_insert_job(
                     ext_id, title, job_city, salary, link,
@@ -599,11 +559,27 @@ async def parse_gowork(city: str, existing_ids: set):
                 logger.error(f"GoWork item: {e}")
 
         logger.info(f"GoWork saved={saved} city={city}")
-
     except Exception as e:
         logger.error(f"parse_gowork({city}): {e}")
 
     return saved
+
+
+# ==================== АСИНХРОННЫЙ ДИСПЕТЧЕР ГОРОДОВ ====================
+
+async def scrape_city_task(city: str, existing_ids: set, semaphore: asyncio.Semaphore) -> int:
+    """Параллельно парсит источники внутри одного города"""
+    async with semaphore:
+        logger.info(f"=== Starting parallel scrape for {city} ===")
+        # Запускаем все три источника (OLX, Praca, GoWork) параллельно для этого города
+        results = await asyncio.gather(
+            parse_olx(city, existing_ids),
+            parse_praca_pl(city, existing_ids),
+            parse_gowork(city, existing_ids)
+        )
+        total_city = sum(results)
+        logger.info(f"=== Finished {city}. Saved {total_city} new entries ===")
+        return total_city
 
 
 # ==================== MAIN ====================
@@ -613,12 +589,10 @@ async def main():
     parser.add_argument("--city", type=str, default=None)
     args = parser.parse_args()
 
-    # Режим сна: если это плановый запуск (без --city) и сейчас ночь по Польше — выходим
     if not args.city and is_night_time():
         logger.info("🌙 Night sleep mode active (23:00 - 08:00 Warsaw time). Skipping scheduled scan.")
         sys.exit(0)
 
-    # Очистка базы: запускается ТОЛЬКО один раз в день (в утреннем запуске между 08:00 и 08:35)
     now_utc = datetime.now(timezone.utc)
     month = now_utc.month
     offset_hours = 2 if 3 < month < 11 else 1
@@ -626,10 +600,8 @@ async def main():
     
     if not args.city and local_time.hour == 8 and local_time.minute < 35:
         cleanup_old_jobs()
-    else:
-        logger.info("⏭ Cleanup skipped (runs once a day at 08:00 AM Warsaw time).")
 
-    # ЗАГРУЖАЕМ ВСЕ СУЩЕСТВУЮЩИЕ ID ИЗ БАЗЫ ОДНИМ ПАКЕТОМ
+    # Считываем кэш ID
     existing_ids = get_all_existing_ids()
 
     # ОПРЕДЕЛЯЕМ ГОРОДА ДЛЯ СКАНИРОВАНИЯ
@@ -637,33 +609,25 @@ async def main():
         cities = [args.city]
         logger.info(f"🔍 On-demand scrape for city: {args.city}")
     else:
-        # Пытаемся получить только те города, где сидят активные юзеры
         db_cities = get_active_cities_from_db()
         if db_cities:
             cities = db_cities
-            logger.info(f"🔁 Smart scrape: Scanning only {len(cities)} cities with active users: {cities}")
+            logger.info(f"Smart scrape: Scanning active cities: {cities}")
         else:
-            # Если база пустая или произошла ошибка — сканируем 5 дефолтных главных городов, чтобы наполнить базу
             cities = MAIN_SCAN_CITIES[:5]
-            logger.info(f"🔁 Fallback scrape: No active users found. Scanning top 5 main cities: {cities}")
+            logger.info(f"Fallback scrape: Scanning top 5 main cities: {cities}")
 
-    total = 0
+    # Запускаем до 3 городов одновременно
+    city_sem = asyncio.Semaphore(3)
+    tasks = []
     for city in cities:
-        logger.info(f"=== {city} ===")
-        try:
-            n1 = await parse_olx(city, existing_ids)
-            # Случайная пауза между источниками (от 1.5 до 3.0 сек) — защита от банов
-            await asyncio.sleep(random.uniform(1.5, 3.0))
-            n2 = await parse_praca_pl(city, existing_ids)
-            await asyncio.sleep(random.uniform(1.5, 3.0))
-            n3 = await parse_gowork(city, existing_ids)
-            await asyncio.sleep(random.uniform(1.5, 3.0))
-            total += n1 + n2 + n3
-            logger.info(f"City {city}: OLX={n1} Praca={n2} GoWork={n3}")
-        except Exception as e:
-            logger.error(f"city loop {city}: {e}")
+        tasks.append(scrape_city_task(city, existing_ids, city_sem))
 
-    logger.info(f"✅ Done. Total saved: {total}")
+    # Сбор всех асинхронных задач
+    results = await asyncio.gather(*tasks)
+    total = sum(results)
+
+    logger.info(f"✅ Done. Total saved across all cities: {total}")
 
 
 if __name__ == "__main__":
