@@ -1163,7 +1163,8 @@ async def scheduled_check():
     cities = list(set(f.get("city", "all") for f in active_filters))
     city_jobs = {}
     for city in cities:
-        city_jobs[city] = db_get_jobs_for_city(city, limit=100, hours=0.35)
+        # ИСПРАВЛЕНО: ищем вакансии за последние 2 часа, чтобы ничего не терять из-за задержек парсера
+        city_jobs[city] = db_get_jobs_for_city(city, limit=100, hours=2)
         await asyncio.sleep(0.5)
 
     for f in active_filters:
