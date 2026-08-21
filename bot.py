@@ -29,6 +29,9 @@ GITHUB_REPO = os.getenv("GITHUB_REPO")
 GITHUB_WORKFLOW_FILE = os.getenv("GITHUB_WORKFLOW_FILE", "scraper.yml")
 GITHUB_REF = os.getenv("GITHUB_REF", "main")
 
+# Твой ID администратора
+ADMIN_ID = 6526189823
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 logging.basicConfig(level=logging.INFO)
@@ -76,6 +79,12 @@ class SetupStates(StatesGroup):
     umowa = State()
 
 
+# Состояния для твоей админки
+class AdminStates(StatesGroup):
+    waiting_for_ad = State()
+    confirm_ad = State()
+
+
 CITIES = [
     ("Warszawa", "Warszawa"), ("Kraków", "Kraków"),
     ("Wrocław", "Wrocław"), ("Poznań", "Poznań"),
@@ -110,7 +119,7 @@ UMOWY = [
     ("Umowa zlecenie", "umowa_zlecenie"),
     ("Umowa o dzieło", "umowa_o_dzielo"),
     ("B2B", "b2b"),
-    ("Staż / Praktyki", "staz"),
+    ("Staż / Praktyки", "staz"),
 ]
 
 UMOWA_DISPLAY = {
@@ -118,7 +127,7 @@ UMOWA_DISPLAY = {
     "umowa_zlecenie": "Umowa zlecenie",
     "umowa_o_dzielo": "Umowa o dzieło",
     "b2b": "B2B",
-    "staz": "Staż / Praktyki",
+    "staz": "Staż / Praktyки",
 }
 
 ETAT_DISPLAY = {
@@ -212,7 +221,7 @@ TEXTS = {
             f"💳 <code>{DONATE_ACCOUNT}</code>\n\n"
             "Pytania i współpraca: @Hriaker1"
         ),
-        "reset_msg": "🔄 Zresetowano! Zaczynamy od nowa.\n\nWybierz język:",
+        "reset_msg": "🔄 Zresetowano! Zaczynamy od nowа.\n\nWybierz język:",
         "help": (
             "🤖 <b>Co robi bot:</b>\n\n"
             "Agreguje oferty pracy z OLX, Praca.pl i GoWork.\n\n"
@@ -277,7 +286,7 @@ TEXTS = {
         "btn_done": "✅ Готово",
         "after_initial": (
             "👆 Це були останні актуальные вакансії за сьогодні.\n\n"
-            "🔄 Тепер бот надсилатиме лише нові вакансії щойно вони з'являться."
+            "🔄 Тепер бот надсилатиме лише нові вакансії щойно они з'являться."
         ),
         "search_paused": (
             "⏸ <b>Пошук тимчасово призупинено</b>\n\n"
@@ -349,7 +358,7 @@ def normalize_umowa(umowa):
     if "o pracę" in u or "o prace" in u: return "umowa_o_prace"
     if "b2b" in u or "selfemployment" in u or "kontrakt b2b" in u: return "b2b"
     if "dzieło" in u or "dzielo" in u: return "umowa_o_dzielo"
-    if "staż" in u or "staz" in u or "praktyk" in u: return "staz"
+    if "staż" in u or "staz" in u or "praktyк" in u: return "staz"
     return None
 
 
@@ -397,7 +406,6 @@ def job_matches_filter(job, user_filter):
 
 def is_delivery_job(job):
     title = (job.get("title") or "").lower()
-    # Так как колонки company в базе нет, мы убираем проверку по ней
     text = f"{title}"
     return any(kw in text for kw in BLOCKED_KEYWORDS)
 
@@ -482,6 +490,16 @@ def db_get_active_filters():
         return []
 
 
+def db_get_all_active_users():
+    """Получает всех уникальных активных юзеров из базы для админской рассылки"""
+    try:
+        r = supabase.table("users").select("telegram_id").eq("is_active", True).execute()
+        return [row["telegram_id"] for row in r.data] if r.data else []
+    except Exception as e:
+        logger.error(f"db_get_all_active_users error: {e}")
+        return []
+
+
 # ==================== SENT STATUS OPTIMIZATION ====================
 
 def db_get_sent_job_ids(tid) -> set:
@@ -534,7 +552,6 @@ def db_pause_search_filter(tid):
 def db_get_jobs_for_city(city, limit=150, hours=24):
     try:
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-        # ИСПРАВЛЕНО: убрали "company" из списка полей, так как этого столбца нет в таблице
         fields = "id, external_id, title, city, salary, url, source, umowa, etat"
 
         if city == "all":
@@ -622,7 +639,6 @@ def format_job(job):
     et = ETAT_DISPLAY.get(job.get("etat")) or job.get("etat")
     lines = [f"💼 <b>{strip_html(job.get('title', ''))}</b>"]
     
-    # Не отображаем компанию, так как данные по ней отсутствуют в базе
     if ut:
         lines.append(f"📄 {strip_html(str(ut))}")
     if et:
@@ -774,7 +790,131 @@ def kb_renew_search(lang):
     ]])
 
 
+# ==================== BACKGROUND AD BROADCASTER ====================
+
+async def run_broadcast(bot: Bot, admin_id: int, from_chat_id: int, message_id: int, users: list):
+    """
+    Фоновый воркер рассылки сообщений.
+    Использует copy_message, чтобы передавать любые медиа, форматирование и кнопки.
+    """
+    sent = 0
+    failed = 0
+    
+    for uid in users:
+        try:
+            # Телеграм просит не слать в ЛС больше 30 сообщений в секунду
+            # Наша задержка 0.05 сек — это гарантированная защита от Flood лимитов
+            await bot.copy_message(
+                chat_id=uid,
+                from_chat_id=from_chat_id,
+                message_id=message_id
+            )
+            sent += 1
+            await asyncio.sleep(0.05) 
+        except Exception as e:
+            # Если словили ошибку (бот заблокирован или юзер удален)
+            # помечаем юзера неактивным в базе
+            db_set_user_active(uid, False)
+            failed += 1
+            logger.warning(f"Failed to copy message to {uid}: {e}")
+            
+    try:
+        await bot.send_message(
+            admin_id,
+            f"📢 <b>Рассылка успешно завершена!</b>\n\n"
+            f"✅ Получили сообщение: {sent}\n"
+            f"❌ Не доставлено (заблокировали/ошибки): {failed}"
+        )
+    except Exception as e:
+        logger.error(f"Failed to send broadcast report to admin: {e}")
+
+
 # ==================== HANDLERS ====================
+
+# --- СЕКРЕТНЫЕ АДМИН-ХЕНДЛЕРЫ ---
+
+@router.message(Command("admin"), F.from_user.id == ADMIN_ID)
+async def cmd_admin(m: Message, state: FSMContext):
+    await state.clear()
+    await state.set_state(AdminStates.waiting_for_ad)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel")
+    ]])
+    await m.answer(
+        "👑 <b>Секретная админ-панель</b>\n\n"
+        "Отправь мне сообщение для рассылки. Это может быть всё что угодно:\n"
+        "• Обычный текст\n"
+        "• Сообщение с картинкой/файлом\n"
+        "• Текст с разметкой (жирный, курсив, ссылки)\n"
+        "• Пересланный откуда-то пост\n\n"
+        "Я покажу тебе превью перед отправкой. Для выхода нажми кнопку ниже.",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+
+
+@router.callback_query(F.data == "admin_cancel", F.from_user.id == ADMIN_ID)
+async def admin_cancel(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await c.message.edit_text("❌ Создание рассылки отменено.")
+    await c.answer()
+
+
+@router.message(AdminStates.waiting_for_ad, F.from_user.id == ADMIN_ID)
+async def admin_get_ad(m: Message, state: FSMContext):
+    # Сохраняем ID сообщения и чат для последующего копирования
+    await state.update_data(ad_msg_id=m.message_id, ad_chat_id=m.chat_id)
+    await state.set_state(AdminStates.confirm_ad)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Начать рассылку", callback_data="admin_send")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel")]
+    ])
+    
+    await m.answer("👇 <b>Вот как твой пост будет выглядеть у пользователей:</b>")
+    # Демонстрируем админу точную копию его поста
+    await m.copy_to(chat_id=m.chat_id)
+    await m.answer(
+        "Если всё выглядит правильно, нажми кнопку ниже, чтобы запустить массовую отправку.",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+
+
+@router.callback_query(AdminStates.confirm_ad, F.data == "admin_send", F.from_user.id == ADMIN_ID)
+async def admin_send_ad(c: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    msg_id = data.get("ad_msg_id")
+    chat_id = data.get("ad_chat_id")
+    await state.clear()
+    
+    if not msg_id or not chat_id:
+        await c.message.edit_text("❌ Произошла ошибка. Пожалуйста, введи /admin заново.")
+        await c.answer()
+        return
+        
+    await c.message.edit_text("⏳ Считываю список активных пользователей из базы данных...")
+    await c.answer()
+    
+    users = db_get_all_active_users()
+    
+    if not users:
+        await c.message.answer("❌ В базе данных нет ни одного активного пользователя!")
+        return
+        
+    await c.message.answer(
+        f"🚀 Массовая рассылка для <b>{len(users)}</b> пользователей успешно запущена "
+        f"в фоновом режиме.\n\nБот продолжит бесперебойно работать, "
+        f"а я напишу тебе сюда сразу же по завершении отправки!",
+        parse_mode="HTML"
+    )
+    
+    # Запускаем фоновую асинхронную задачу, чтобы сам бот не завис
+    asyncio.create_task(run_broadcast(bot, ADMIN_ID, chat_id, msg_id, users))
+
+
+# --- СТАНДАРТНЫЕ ХЕНДЛЕРЫ ПОЛЬЗОВАТЕЛЕЙ ---
 
 @router.message(Command("start"))
 async def cmd_start(m: Message, state: FSMContext):
