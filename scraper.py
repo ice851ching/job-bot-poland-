@@ -6,6 +6,7 @@ import logging
 import json
 import re
 import argparse
+import random  # Добавлено для случайных пауз (защита от банов)
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -103,7 +104,7 @@ def normalize_umowa(umowa):
         return "b2b"
     if "dzieło" in u or "dzielo" in u:
         return "umowa_o_dzielo"
-    if "staż" in u or "staz" in u or "praktyk" in u:
+    if "staż" in u or "staz" in u or "praktyк" in u:
         return "staz"
     return None
 
@@ -149,7 +150,7 @@ def fetch_url(url: str):
             "Sec-Fetch-Mode": "navigate",
         },
         impersonate="chrome120",
-        timeout=12, # ИСПРАВЛЕНО: Безопасный таймаут 12 секунд вместо 30 (защита от зависаний)
+        timeout=15, # Золотая середина: 15 секунд таймаута (не виснет долго, но успевает загрузиться)
     )
     return r.status_code, r.text
 
@@ -236,7 +237,7 @@ def cleanup_old_jobs():
 def get_active_cities_from_db() -> list:
     """
     Сканирует базу данных и находит только те города, которые РЕАЛЬНО
-    выбраны активными пользователями. Это снижает нагрузку на 80%!
+    выбраны активными пользователями. Это бережет ресурсы на 80%.
     """
     try:
         r = supabase.table("user_filters").select("city").eq("is_paused", False).execute()
@@ -247,7 +248,6 @@ def get_active_cities_from_db() -> list:
         for row in r.data:
             c = row.get("city")
             if c:
-                # Если кто-то подписан на "Вся Польша", парсим наши дефолтные города
                 if c == "all":
                     return MAIN_SCAN_CITIES
                 cities.add(c)
@@ -405,7 +405,8 @@ async def parse_olx(city: str, existing_ids: set):
                     saved += 1
                     existing_ids.add(ext_id)  # Запоминаем, чтобы не вставить повторно за этот же запуск
 
-                await asyncio.sleep(0.3)
+                # Добавлен Jitter: случайная задержка от 1.0 до 3.0 секунд (эмуляция реального человека)
+                await asyncio.sleep(random.uniform(1.0, 3.0))
 
             except Exception as e:
                 logger.error(f"OLX item: {e}")
@@ -651,11 +652,12 @@ async def main():
         logger.info(f"=== {city} ===")
         try:
             n1 = await parse_olx(city, existing_ids)
-            await asyncio.sleep(2)
+            # Случайная пауза между источниками (от 1.5 до 3.0 сек) — защита от банов
+            await asyncio.sleep(random.uniform(1.5, 3.0))
             n2 = await parse_praca_pl(city, existing_ids)
-            await asyncio.sleep(2)
+            await asyncio.sleep(random.uniform(1.5, 3.0))
             n3 = await parse_gowork(city, existing_ids)
-            await asyncio.sleep(2)
+            await asyncio.sleep(random.uniform(1.5, 3.0))
             total += n1 + n2 + n3
             logger.info(f"City {city}: OLX={n1} Praca={n2} GoWork={n3}")
         except Exception as e:
