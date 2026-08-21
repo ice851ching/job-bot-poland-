@@ -635,7 +635,7 @@ async def start_web_server():
 # ==================== FORMAT ====================
 
 def format_job(job):
-    ut = UMOWA_DISPLAY.get(job.get("umowa")) or job.get("umowa")
+    ut = UMOWY_DISPLAY.get(job.get("umowa")) or job.get("umowa")
     et = ETAT_DISPLAY.get(job.get("etat")) or job.get("etat")
     lines = [f"💼 <b>{strip_html(job.get('title', ''))}</b>"]
     
@@ -793,16 +793,11 @@ def kb_renew_search(lang):
 # ==================== BACKGROUND AD BROADCASTER ====================
 
 async def run_broadcast(bot: Bot, admin_id: int, from_chat_id: int, message_id: int, users: list):
-    """
-    Фоновый воркер рассылки сообщений.
-    Использует copy_message, чтобы передавать любые медиа, форматирование и кнопки.
-    """
     sent = 0
     failed = 0
     
     for uid in users:
         try:
-            # Наша микрозадержка 0.05 сек — это гарантированная защита от Flood лимитов
             await bot.copy_message(
                 chat_id=uid,
                 from_chat_id=from_chat_id,
@@ -811,8 +806,6 @@ async def run_broadcast(bot: Bot, admin_id: int, from_chat_id: int, message_id: 
             sent += 1
             await asyncio.sleep(0.05) 
         except Exception as e:
-            # Если словили ошибку (бот заблокирован или юзер удален)
-            # помечаем юзера неактивным в базе
             db_set_user_active(uid, False)
             failed += 1
             logger.warning(f"Failed to copy message to {uid}: {e}")
@@ -863,11 +856,10 @@ async def admin_cancel(c: CallbackQuery, state: FSMContext):
 @router.message(AdminStates.waiting_for_ad, F.from_user.id == ADMIN_ID)
 async def admin_get_ad(m: Message, state: FSMContext):
     try:
-        # Логируем, что мы вошли в обработчик
         logger.info(f"Admin triggered ad preview for message_id {m.message_id}")
         
-        # Сохраняем ID сообщения и чат для последующего копирования
-        await state.update_data(ad_msg_id=m.message_id, ad_chat_id=m.chat_id)
+        # Исправлено: используем m.chat.id
+        await state.update_data(ad_msg_id=m.message_id, ad_chat_id=m.chat.id)
         await state.set_state(AdminStates.confirm_ad)
         
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -877,10 +869,10 @@ async def admin_get_ad(m: Message, state: FSMContext):
         
         await m.answer("👇 <b>Вот как твой пост будет выглядеть у пользователей:</b>")
         
-        # Используем безопасный прямой вызов bot.copy_message
+        # Исправлено: передаем m.chat.id
         await bot.copy_message(
-            chat_id=m.chat_id,
-            from_chat_id=m.chat_id,
+            chat_id=m.chat.id,
+            from_chat_id=m.chat.id,
             message_id=m.message_id
         )
         
@@ -923,7 +915,6 @@ async def admin_send_ad(c: CallbackQuery, state: FSMContext):
             parse_mode="HTML"
         )
         
-        # Запускаем фоновую асинхронную задачу, чтобы сам бот не завис
         asyncio.create_task(run_broadcast(bot, ADMIN_ID, chat_id, msg_id, users))
         
     except Exception as e:
