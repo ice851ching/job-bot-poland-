@@ -43,6 +43,14 @@ dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 dp.include_router(router)
 
+# Локальные блокировки для каждого пользователя, чтобы исключить Race Condition при отправке
+USER_LOCKS = {}
+
+def get_user_lock(tid: int) -> asyncio.Lock:
+    if tid not in USER_LOCKS:
+        USER_LOCKS[tid] = asyncio.Lock()
+    return USER_LOCKS[tid]
+
 REF_LINK = "https://panel.city-drive.pl/ref/PracaBOT"
 DONATE_ACCOUNT = "84 9511 0000 0052 9681 3000 0010"
 
@@ -517,12 +525,16 @@ def db_get_sent_job_ids(tid) -> set:
 
 
 def db_mark_sent_batch(tid, job_ids: list) -> bool:
-    """Пакетная вставка отправленных вакансий — 1 запрос вместо десятков."""
+    """Пакетная безошибочная фиксация отправки (upsert без дублей)"""
     if not job_ids:
         return True
     try:
         records = [{"telegram_id": tid, "job_id": jid} for jid in job_ids]
-        supabase.table("sent_jobs").insert(records).execute()
+        supabase.table("sent_jobs").upsert(
+            records,
+            on_conflict="telegram_id,job_id",
+            ignore_duplicates=True
+        ).execute()
         return True
     except Exception as e:
         logger.error(f"db_mark_sent_batch error for {tid}: {e}")
@@ -569,7 +581,14 @@ def db_get_jobs_for_city(city, limit=150, hours=24):
             r = supabase.table("jobs").select(fields).gt("created_at", cutoff).order("created_at", desc=True).limit(limit).execute()
             return r.data or []
 
-        r = supabase.table("jobs").select(fields).ilike("city", f"%{city}%").gt("created_at", cutoff).order("created_at", desc=True).limit(limit).execute()
+        slug = get_city_slug(city)
+        r = supabase.table("jobs") \
+            .select(fields) \
+            .or_(f"city.ilike.%{city}%,city.ilike.%{slug}%") \
+            .gt("created_at", cutoff) \
+            .order("created_at", desc=True) \
+            .limit(limit) \
+            .execute()
         return r.data or []
     except Exception as e:
         logger.error(f"db_get_jobs_for_city: {e}")
@@ -663,55 +682,34 @@ async def send_promo(chat_id):
 
 async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=False):
     """
-    Отправляет вакансии одному пользователю.
-
-    Важный принцип: запись в sent_jobs делаем только после успешной отправки
-    сообщения в Telegram. Поэтому рестарт бота не должен терять вакансии.
+    Отправляет вакансии одному пользователю с помощью индивидуальной блокировки (Lock),
+    исключая состояние гонки (Race condition) и дубликаты.
     """
-    sent, sf, ss, blocked = 0, 0, 0, 0
-    already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, tid)
-    sent_job_ids_batch = []
+    async with get_user_lock(tid):
+        sent, sf, ss, blocked = 0, 0, 0, 0
+        already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, tid)
+        sent_job_ids_batch = []
 
-    for job in jobs:
-        if sent >= limit:
-            break
+        for job in jobs:
+            if sent >= limit:
+                break
 
-        job_id = job.get("id")
-        if job_id is None:
-            continue
+            job_id = job.get("id")
+            if job_id is None:
+                continue
 
-        if is_delivery_job(job):
-            blocked += 1
-            continue
+            if is_delivery_job(job):
+                blocked += 1
+                continue
 
-        if user_filter and not job_matches_filter(job, user_filter):
-            sf += 1
-            continue
+            if user_filter and not job_matches_filter(job, user_filter):
+                sf += 1
+                continue
 
-        if job_id in already_sent_ids:
-            ss += 1
-            continue
+            if job_id in already_sent_ids:
+                ss += 1
+                continue
 
-        try:
-            await bot.send_message(
-                tid,
-                format_job(job),
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
-            sent_job_ids_batch.append(job_id)
-            already_sent_ids.add(job_id)
-            sent += 1
-
-            # Небольшая пауза только между сообщениями одного пользователя.
-            await asyncio.sleep(0.05)
-
-        except TelegramRetryAfter as e:
-            # Telegram попросил подождать. Ждём указанное время и повторяем
-            # именно это сообщение, не помечая вакансию отправленной заранее.
-            retry_after = max(1, int(getattr(e, "retry_after", 1)))
-            logger.warning(f"Telegram rate limit for {tid}; sleeping {retry_after}s")
-            await asyncio.sleep(retry_after)
             try:
                 await bot.send_message(
                     tid,
@@ -722,56 +720,71 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
                 sent_job_ids_batch.append(job_id)
                 already_sent_ids.add(job_id)
                 sent += 1
+
+                # Небольшая пауза только между сообщениями одного пользователя.
+                await asyncio.sleep(0.05)
+
+            except TelegramRetryAfter as e:
+                retry_after = max(1, int(getattr(e, "retry_after", 1)))
+                logger.warning(f"Telegram rate limit for {tid}; sleeping {retry_after}s")
+                await asyncio.sleep(retry_after)
+                try:
+                    await bot.send_message(
+                        tid,
+                        format_job(job),
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
+                    sent_job_ids_batch.append(job_id)
+                    already_sent_ids.add(job_id)
+                    sent += 1
+                except TelegramForbiddenError:
+                    logger.warning(f"send to {tid}: bot was blocked by user")
+                    await asyncio.to_thread(db_set_user_active, tid, False)
+                    await asyncio.to_thread(db_delete_filter, tid)
+                    blocked += 1
+                    break
+                except Exception as retry_error:
+                    logger.warning(f"retry send to {tid} error: {retry_error}")
+                    break
+
             except TelegramForbiddenError:
                 logger.warning(f"send to {tid}: bot was blocked by user")
                 await asyncio.to_thread(db_set_user_active, tid, False)
                 await asyncio.to_thread(db_delete_filter, tid)
                 blocked += 1
                 break
-            except Exception as retry_error:
-                logger.warning(f"retry send to {tid} error: {retry_error}")
+
+            except Exception as e:
+                logger.warning(f"send to {tid} error: {e}")
                 break
 
-        except TelegramForbiddenError:
-            # Заблокировавший бота пользователь больше не должен попадать
-            # в каждый 15-минутный проход scheduler.
-            logger.warning(f"send to {tid}: bot was blocked by user")
-            await asyncio.to_thread(db_set_user_active, tid, False)
-            await asyncio.to_thread(db_delete_filter, tid)
-            blocked += 1
-            break
+        if sent_job_ids_batch:
+            ok = await asyncio.to_thread(db_mark_sent_batch, tid, sent_job_ids_batch)
+            if not ok:
+                logger.error(
+                    f"sent_jobs insert failed for {tid}; {len(sent_job_ids_batch)} jobs "
+                    "were delivered but not marked as sent"
+                )
 
-        except Exception as e:
-            logger.warning(f"send to {tid} error: {e}")
-            # Не удаляем фильтр при временной ошибке Telegram/сети.
-            break
+        logger.info(
+            f"User {tid}: Sent={sent} filtered={sf} already={ss} blocked={blocked}"
+        )
 
-    if sent_job_ids_batch:
-        ok = await asyncio.to_thread(db_mark_sent_batch, tid, sent_job_ids_batch)
-        if not ok:
-            logger.error(
-                f"sent_jobs insert failed for {tid}; {len(sent_job_ids_batch)} jobs "
-                "were delivered but not marked as sent"
-            )
+        if is_initial:
+            lang = await asyncio.to_thread(get_user_lang, tid)
+            if sent > 0:
+                try:
+                    await bot.send_message(tid, t(lang, "after_initial"))
+                except Exception:
+                    pass
+            else:
+                try:
+                    await bot.send_message(tid, t(lang, "no_jobs"))
+                except Exception:
+                    pass
 
-    logger.info(
-        f"User {tid}: Sent={sent} filtered={sf} already={ss} blocked={blocked}"
-    )
-
-    if is_initial:
-        lang = await asyncio.to_thread(get_user_lang, tid)
-        if sent > 0:
-            try:
-                await bot.send_message(tid, t(lang, "after_initial"))
-            except Exception:
-                pass
-        else:
-            try:
-                await bot.send_message(tid, t(lang, "no_jobs"))
-            except Exception:
-                pass
-
-    return sent
+        return sent
 
 
 # ==================== KEYBOARDS ====================
