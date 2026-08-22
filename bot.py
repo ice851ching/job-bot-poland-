@@ -426,6 +426,20 @@ def is_delivery_job(job):
     return any(kw in title for kw in BLOCKED_KEYWORDS)
 
 
+def is_invalid_olx_url(url: str) -> bool:
+    """Проверяет, является ли ссылка битой или ссылкой на профиль OLX вместо вакансии."""
+    if not url:
+        return True
+    
+    url_lower = url.lower()
+    
+    # Отсекаем профили пользователей/компаний OLX
+    if "olx.pl/oferty/uzytkownik/" in url_lower or "/uzytkownik/" in url_lower:
+        return True
+        
+    return False
+
+
 def is_night_time() -> bool:
     """Определяет, ночь ли в Польше (23:00 - 08:00)"""
     now_utc = datetime.now(timezone.utc)
@@ -696,6 +710,10 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
 
             job_id = job.get("id")
             if job_id is None:
+                continue
+
+            # Отсекаем битые ссылки и ссылки на профили пользователей OLX
+            if is_invalid_olx_url(job.get("url")):
                 continue
 
             if is_delivery_job(job):
@@ -1136,12 +1154,6 @@ async def on_renew_search(c: CallbackQuery):
 async def scheduled_check():
     """
     Основной цикл новых вакансий.
-
-    - один scheduler instance одновременно;
-    - города загружаются контролируемо (с использованием семафора);
-    - пользователи обрабатываются с ограниченной конкуренцией;
-    - ошибка одного пользователя не останавливает остальных;
-    - CancelledError при остановке Render корректно пробрасывается дальше.
     """
     started = datetime.now(timezone.utc)
 
@@ -1202,8 +1214,6 @@ async def scheduled_check():
         cities = list({f.get("city", "all") for f in active_filters})
         logger.info(f"🏙 Loading jobs for {len(cities)} cities: {cities}")
 
-        # Ограничиваем количество одновременных запросов к БД до 3,
-        # чтобы не класть Event Loop и соединения Supabase.
         db_semaphore = asyncio.Semaphore(3)
 
         async def fetch_jobs_safe(city):
@@ -1224,7 +1234,6 @@ async def scheduled_check():
                 city_jobs[city] = result or []
                 logger.info(f"📦 {city}: {len(city_jobs[city])} jobs")
 
-        # Не создаём сотни одновременных Telegram запросов.
         semaphore = asyncio.Semaphore(8)
 
         async def process_user(f):
