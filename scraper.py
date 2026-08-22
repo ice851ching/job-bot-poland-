@@ -97,7 +97,7 @@ def normalize_umowa(text):
         return None
     if isinstance(text, list):
         text = " ".join(str(v) for v in text)
-    t = str(text).lower().strip()
+    t = str(text).lower().strip().replace("_", " ").replace("-", " ")
     
     # Umowa zlecenie
     if any(x in t for x in ["zlecenie", "zlecenia", "zlece", "mandate contract", "доручення", "договор злецения"]):
@@ -112,7 +112,7 @@ def normalize_umowa(text):
         return "umowa_o_prace"
 
     # B2B
-    if any(x in t for x in ["b2b", "selfemployment", "self-employment", "kontrakt b2b", "kontrakt gospodarczy", "działalność"]):
+    if any(x in t for x in ["b2b", "selfemployment", "self-employment", "kontrakt b2b", "kontrakt gospodarczy"]):
         return "b2b"
 
     # Umowa o dzieło
@@ -122,17 +122,15 @@ def normalize_umowa(text):
         return "umowa_o_dzielo"
 
     # Staż / Praktyki
-    if any(x in t for x in ["staż", "staz", "praktyk", "praktyka", "internship", "стажировк", "стажуван"]):
+    if any(x in t for x in ["staż", "staz", "praktyk", "praktyka", "internship"]):
         return "staz"
 
     return None
 
 
-def normalize_etat(text):
+def normalize_etat(text, salary_text=None):
     if not text:
-        return None
-    if isinstance(text, list):
-        text = " ".join(str(v) for v in text)
+        text = ""
     t = str(text).lower().strip()
 
     # Неполный день / Part-time
@@ -149,6 +147,12 @@ def normalize_etat(text):
         "полный", "повний", "1/1", "etatowa"
     ]):
         return "full"
+
+    # Умный Fallback по зарплате
+    if salary_text:
+        s = str(salary_text).lower()
+        if any(x in s for x in ["mies", "m-c", "mc", "/ m", "zł/mies"]):
+            return "full"
 
     return None
 
@@ -187,8 +191,7 @@ def get_all_existing_ids() -> set:
         page_size = 1000
         offset = 0
         while True:
-            r = supabase.table("jobs").select("external_id") \
-                .range(offset, offset + page_size - 1).execute()
+            r = supabase.table("jobs").select("external_id").range(offset, offset + page_size - 1).execute()
             if not r.data:
                 break
             for row in r.data:
@@ -261,7 +264,6 @@ def get_active_cities_from_db() -> list:
         r = supabase.table("user_filters").select("city").eq("is_paused", False).execute()
         if not r.data:
             return []
-            
         cities = set()
         for row in r.data:
             c = row.get("city")
@@ -269,20 +271,16 @@ def get_active_cities_from_db() -> list:
                 if c == "all":
                     return MAIN_SCAN_CITIES
                 cities.add(c)
-                
         return list(cities)
     except Exception as e:
         logger.error(f"get_active_cities_from_db error: {e}")
         return []
 
 
-# ==================== OLX ====================
+# ==================== OLX (УЛЬТРА-СОВРЕМЕННЫЙ ПАРСЕР КАРТОЧЕК) ====================
 
-def extract_olx_params(item: dict, title: str):
-    """
-    1. Ищет умову и этат в массиве params JSON.
-    2. Если не находит — делает FALLBACK анализ по тексту заголовка (title)!
-    """
+def extract_olx_params_json(item: dict, title: str, salary: str):
+    """Fallback-парсинг параметров из JSON, если сломалась верстка HTML-карточек"""
     umowa_key = None
     etat_key = None
     params = item.get("params", [])
@@ -292,23 +290,18 @@ def extract_olx_params(item: dict, title: str):
         key = str(p.get("key") or "").lower()
         name = str(p.get("name") or "").lower()
         val = p.get("value")
-        
-        val_label = ""
-        if isinstance(val, dict):
-            val_label = str(val.get("label") or val.get("key") or "")
-        else:
-            val_label = str(val or "")
+        val_label = str(val.get("label") or val.get("key") or "") if isinstance(val, dict) else str(val or "")
             
         if "contract" in key or "umow" in key or "umow" in name:
             umowa_key = normalize_umowa(val_label)
         if "hours" in key or "wymiar" in key or "etat" in name:
             etat_key = normalize_etat(val_label)
 
-    # FALLBACK ПО ЗАГОЛОВКУ (TITLE):
+    # Fallback по заголовку
     if not umowa_key:
         umowa_key = normalize_umowa(title)
     if not etat_key:
-        etat_key = normalize_etat(title)
+        etat_key = normalize_etat(title, salary)
             
     return umowa_key, etat_key
 
@@ -325,30 +318,106 @@ async def parse_olx(city: str, existing_ids: set):
         if status != 200:
             return saved
 
+        soup = BeautifulSoup(html, "html.parser")
+        
+        # Находим карточки вакансий на странице
+        cards = soup.select('div.jobs-ad-card')
+        if not cards:
+            # Резервный селектор на случай изменения классов
+            cards = [link.find_parent('div') for link in soup.select('a[data-testid="card-title-link"]')]
+            cards = [c for c in cards if c is not None]
+
+        # 1. ОСНОВНОЙ ПУТЬ: ПАРСИМ КАРТОЧКИ ИЗ HTML (МГНОВЕННО, БЕЗ СУБЗАПРОСОВ)
+        if cards:
+            logger.info(f"OLX parsing HTML cards: {len(cards)} found for {city}")
+            for card in cards[:30]:
+                try:
+                    title_el = card.select_one('a[data-testid="card-title-link"]')
+                    if not title_el:
+                        continue
+                    title = strip_html(title_el.get_text())
+                    if not title:
+                        continue
+
+                    link = title_el.get('href', '').split('?')[0]
+                    if not link:
+                        continue
+                    if not link.startswith('http'):
+                        link = "https://www.olx.pl" + link
+
+                    ext_id = hashlib.md5(f"olx_{link}".encode()).hexdigest()
+                    if ext_id in existing_ids:
+                        continue
+
+                    salary = None
+                    job_city = city
+                    umowa_key = None
+                    etat_key = None
+
+                    # Читаем все текстовые блоки внутри карточки
+                    for p in card.select('p'):
+                        text = p.get_text(strip=True)
+                        if not text:
+                            continue
+                        if "zł" in text.lower() or "pln" in text.lower() or "eur" in text.lower():
+                            salary = text
+                        else:
+                            # Проверяем, не лежит ли тут умова или этат прямо в тексте карточки!
+                            u = normalize_umowa(text)
+                            if u:
+                                umowa_key = u
+                                continue
+                            e = normalize_etat(text)
+                            if e:
+                                etat_key = e
+                                continue
+                            if "odświeżono" not in text.lower() and "dzisiaj" not in text.lower() and len(text) > 2:
+                                job_city = text
+
+                    # Если ленивый работодатель не вынес умову на плашку карточки — делаем fallback по названию
+                    if not umowa_key:
+                        umowa_key = normalize_umowa(title)
+                    if not etat_key:
+                        etat_key = normalize_etat(title, salary)
+
+                    job_id = db_insert_job(
+                        ext_id,
+                        title,
+                        strip_html(job_city or city),
+                        strip_html(salary) if salary else None,
+                        link,
+                        "OLX",
+                        umowa=umowa_key,
+                        etat=etat_key,
+                    )
+                    if job_id:
+                        saved += 1
+                        existing_ids.add(ext_id)
+                except Exception as e:
+                    logger.error(f"OLX HTML card parser error: {e}")
+            
+            logger.info(f"OLX HTML parsing finished. Saved={saved} city={city}")
+            if saved > 0:
+                return saved
+
+        # 2. РЕЗЕРВНЫЙ ПУТЬ: ПАРСИМ ЧЕРЕЗ JSON (ЕСЛИ КАРТОЧКИ НЕ НАЙДЕНЫ)
+        logger.info(f"OLX HTML parsing yielded 0 saves, falling back to JSON state for {city}")
         data = None
-        m = re.search(
-            r'window\.__PRERENDERED_STATE__\s*=\s*"(.*?)";\s*(?:window|</script>)',
-            html, re.DOTALL
-        )
+        m = re.search(r'window\.__PRERENDERED_STATE__\s*=\s*"(.*?)";\s*(?:window|</script>)', html, re.DOTALL)
         if m:
             raw = m.group(1).replace('\\"', '"').replace('\\\\', '\\')
             try:
                 data = json.loads(raw)
             except Exception:
                 try:
-                    data = json.loads(
-                        m.group(1).encode().decode("unicode_escape")
-                    )
+                    data = json.loads(m.group(1).encode().decode("unicode_escape"))
                 except Exception:
                     pass
 
         if not data:
-            logger.warning(f"OLX no data city={city}")
             return saved
 
-        listing = data.get("listing", {}).get(
-            "listing", data.get("listing", {})
-        )
+        listing = data.get("listing", {}).get("listing", data.get("listing", {}))
         ads = listing.get("ads", [])
         if not ads:
             for k in ["adverts", "data", "items"]:
@@ -356,8 +425,6 @@ async def parse_olx(city: str, existing_ids: set):
                 if v and isinstance(v, list):
                     ads = v
                     break
-
-        logger.info(f"OLX ads={len(ads)} city={city}")
 
         for item in ads[:30]:
             try:
@@ -370,23 +437,20 @@ async def parse_olx(city: str, existing_ids: set):
                     sid, iid = item.get("slug", ""), item.get("id", "")
                     if sid and iid:
                         link = f"https://www.olx.pl/oferta/{sid}-ID{iid}.html"
-                if not link:
-                    continue
-                if not link.startswith("http"):
-                    link = "https://www.olx.pl" + link
+                if not link or not link.startswith("http"):
+                    if link and not link.startswith("http"):
+                        link = "https://www.olx.pl" + link
+                    else:
+                        continue
 
                 ext_id = hashlib.md5(f"olx_{link}".encode()).hexdigest()
-
                 if ext_id in existing_ids:
                     continue
 
                 salary = None
                 sal = item.get("salary")
                 if sal:
-                    salary = (
-                        sal.get("displayValue")
-                        if isinstance(sal, dict) else str(sal)
-                    )
+                    salary = sal.get("displayValue") if isinstance(sal, dict) else str(sal)
                 if not salary:
                     price = item.get("price", {})
                     if isinstance(price, dict):
@@ -396,17 +460,12 @@ async def parse_olx(city: str, existing_ids: set):
                 job_city = ""
                 if isinstance(location, dict):
                     cd = location.get("city", {})
-                    job_city = (
-                        cd.get("name", "") if isinstance(cd, dict)
-                        else (cd if isinstance(cd, str)
-                              else location.get("cityName", ""))
-                    )
+                    job_city = cd.get("name", "") if isinstance(cd, dict) else (cd if isinstance(cd, str) else location.get("cityName", ""))
 
                 if city and job_city and not city_matches(job_city, city):
                     continue
 
-                # Извлечение с fallback-анализом заголовка
-                umowa_key, etat_key = extract_olx_params(item, title)
+                umowa_key, etat_key = extract_olx_params_json(item, title, salary)
 
                 job_id = db_insert_job(
                     ext_id,
@@ -421,14 +480,12 @@ async def parse_olx(city: str, existing_ids: set):
                 if job_id:
                     saved += 1
                     existing_ids.add(ext_id)
-
             except Exception as e:
-                logger.error(f"OLX item error: {e}")
+                logger.error(f"OLX JSON item error: {e}")
 
-        logger.info(f"OLX saved={saved} city={city}")
-
+        logger.info(f"OLX JSON saved={saved} city={city}")
     except Exception as e:
-        logger.error(f"parse_olx({city}): {e}")
+        logger.error(f"parse_olx({city}) general error: {e}")
 
     return saved
 
@@ -458,13 +515,13 @@ async def parse_praca_pl(city: str, existing_ids: set):
                     continue
 
                 link = title_el.get("href", "").split("#")[0]
-                if not link:
-                    continue
-                if not link.startswith("http"):
-                    link = "https://www.praca.pl" + link
+                if not link or not link.startswith("http"):
+                    if link and not link.startswith("http"):
+                        link = "https://www.praca.pl" + link
+                    else:
+                        continue
 
                 ext_id = hashlib.md5(f"pracapl_{link}".encode()).hexdigest()
-
                 if ext_id in existing_ids:
                     continue
 
@@ -484,7 +541,6 @@ async def parse_praca_pl(city: str, existing_ids: set):
                 details_el = card.select_one("div.listing__main-details")
                 dt = details_el.get_text(" ", strip=True).lower() if details_el else ""
 
-                # Извлечение из деталей + fallback по заголовку
                 umowa_key = normalize_umowa(dt) or normalize_umowa(title)
                 etat_key = normalize_etat(dt) or normalize_etat(title)
 
@@ -500,10 +556,8 @@ async def parse_praca_pl(city: str, existing_ids: set):
                 logger.error(f"Praca.pl item: {e}")
 
         logger.info(f"Praca.pl saved={saved} city={city}")
-
     except Exception as e:
         logger.error(f"parse_praca_pl({city}): {e}")
-
     return saved
 
 
@@ -533,13 +587,13 @@ async def parse_gowork(city: str, existing_ids: set):
                     continue
 
                 link = title_el.get("href", "")
-                if not link:
-                    continue
-                if not link.startswith("http"):
-                    link = "https://www.gowork.pl" + link
+                if not link or not link.startswith("http"):
+                    if link and not link.startswith("http"):
+                        link = "https://www.gowork.pl" + link
+                    else:
+                        continue
 
                 ext_id = hashlib.md5(f"gowork_{link}".encode()).hexdigest()
-
                 if ext_id in existing_ids:
                     continue
 
@@ -569,10 +623,8 @@ async def parse_gowork(city: str, existing_ids: set):
                             tags_text.append(text)
 
                 combined_tags = " ".join(tags_text)
-                
-                # Извлечение из тегов + fallback по заголовку
                 umowa_key = normalize_umowa(combined_tags) or normalize_umowa(title)
-                etat_key = normalize_etat(combined_tags) or normalize_etat(title)
+                etat_key = normalize_etat(combined_tags, salary) or normalize_etat(title, salary)
 
                 job_id = db_insert_job(
                     ext_id, title, job_city, salary, link,
@@ -586,26 +638,21 @@ async def parse_gowork(city: str, existing_ids: set):
                 logger.error(f"GoWork item: {e}")
 
         logger.info(f"GoWork saved={saved} city={city}")
-
     except Exception as e:
         logger.error(f"parse_gowork({city}): {e}")
-
     return saved
 
 
-# ==================== АСИНХРОННЫЙ ДИСПЕТЧЕР ГОРОДОВ ====================
+# ==================== АСИНХРОННЫЙ ДИСПЕТЧЕР ====================
 
 async def scrape_city_task(city: str, existing_ids: set, semaphore: asyncio.Semaphore) -> int:
     async with semaphore:
-        logger.info(f"=== Starting parallel scrape for {city} ===")
         results = await asyncio.gather(
             parse_olx(city, existing_ids),
             parse_praca_pl(city, existing_ids),
             parse_gowork(city, existing_ids)
         )
-        total_city = sum(results)
-        logger.info(f"=== Finished {city}. Saved {total_city} new entries ===")
-        return total_city
+        return sum(results)
 
 
 # ==================== MAIN ====================
@@ -615,12 +662,10 @@ async def main():
     parser.add_argument("--city", type=str, default=None)
     args = parser.parse_args()
 
-    # Режим сна: если это плановый запуск (без --city) и сейчас ночь по Польше — выходим
     if not args.city and is_night_time():
-        logger.info("🌙 Night sleep mode active (23:00 - 08:00 Warsaw time). Skipping scheduled scan.")
+        logger.info("🌙 Night sleep mode active. Skipping.")
         sys.exit(0)
 
-    # Очистка базы: запускается ТОЛЬКО один раз в день (в утреннем запуске между 08:00 и 08:35)
     now_utc = datetime.now(timezone.utc)
     month = now_utc.month
     offset_hours = 2 if 3 < month < 11 else 1
@@ -628,31 +673,17 @@ async def main():
     
     if not args.city and local_time.hour == 8 and local_time.minute < 35:
         cleanup_old_jobs()
-    else:
-        logger.info("⏭ Cleanup skipped (runs once a day at 08:00 AM Warsaw time).")
 
-    # Считываем кэш ID
     existing_ids = get_all_existing_ids()
 
-    # ОПРЕДЕЛЯЕМ ГОРОДА ДЛЯ СКАНИРОВАНИЯ
     if args.city:
         cities = [args.city]
-        logger.info(f"🔍 On-demand scrape for city: {args.city}")
     else:
         db_cities = get_active_cities_from_db()
-        if db_cities:
-            cities = db_cities
-            logger.info(f"Smart scrape: Scanning active cities: {cities}")
-        else:
-            cities = MAIN_SCAN_CITIES[:5]
-            logger.info(f"Fallback scrape: Scanning top 5 main cities: {cities}")
+        cities = db_cities if db_cities else MAIN_SCAN_CITIES[:5]
 
-    # Запускаем до 3 городов одновременно
     city_sem = asyncio.Semaphore(3)
-    tasks = []
-    for city in cities:
-        tasks.append(scrape_city_task(city, existing_ids, city_sem))
-
+    tasks = [scrape_city_task(city, existing_ids, city_sem) for city in cities]
     results = await asyncio.gather(*tasks)
     total = sum(results)
 
