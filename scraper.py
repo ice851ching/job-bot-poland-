@@ -6,6 +6,7 @@ import logging
 import json
 import re
 import argparse
+import random
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -89,42 +90,66 @@ def strip_html(text):
     return text.strip()
 
 
-def normalize_umowa(umowa):
-    if not umowa:
+# ==================== УМНАЯ НОРМАЛИЗАЦИЯ И РАСПОЗНАВАНИЕ ====================
+
+def normalize_umowa(text):
+    if not text:
         return None
-    if isinstance(umowa, list):
-        umowa = " ".join(str(v) for v in umowa)
-    u = str(umowa).lower().strip().replace("_", " ").replace("-", " ")
-    if "zlecenie" in u:
+    if isinstance(text, list):
+        text = " ".join(str(v) for v in text)
+    t = str(text).lower().strip()
+    
+    # Umowa zlecenie
+    if any(x in t for x in ["zlecenie", "zlecenia", "zlece", "mandate contract", "доручення", "договор злецения"]):
         return "umowa_zlecenie"
-    if "o pracę" in u or "o prace" in u:
+    if re.search(r'\b(uz)\b', t):
+        return "umowa_zlecenie"
+
+    # Umowa o pracę
+    if any(x in t for x in ["o pracę", "o prace", "praca etatowa", "employment contract", "трудовой", "трудовий"]):
         return "umowa_o_prace"
-    if "b2b" in u or "selfemployment" in u or "kontrakt b2b" in u:
+    if re.search(r'\b(uop)\b', t):
+        return "umowa_o_prace"
+
+    # B2B
+    if any(x in t for x in ["b2b", "selfemployment", "self-employment", "kontrakt b2b", "kontrakt gospodarczy", "działalność"]):
         return "b2b"
-    if "dzieło" in u or "dzielo" in u:
+
+    # Umowa o dzieło
+    if any(x in t for x in ["dzieło", "dzielo"]):
         return "umowa_o_dzielo"
-    if "staż" in u or "staz" in u or "praktyk" in u:
+    if re.search(r'\b(uod)\b', t):
+        return "umowa_o_dzielo"
+
+    # Staż / Praktyki
+    if any(x in t for x in ["staż", "staz", "praktyk", "praktyka", "internship", "стажировк", "стажуван"]):
         return "staz"
+
     return None
 
 
-def normalize_etat(etat):
-    if not etat:
+def normalize_etat(text):
+    if not text:
         return None
-    if isinstance(etat, list):
-        etat = " ".join(str(v) for v in etat)
-    e = str(etat).lower().strip().replace("_", " ").replace("-", " ")
-    if any(x in e for x in [
-        "parttime", "part time", "niepełny", "niepelny",
-        "1/2", "pół etatu", "pol etatu", "3/4",
-        "część etatu", "czesc etatu", "tymczasowa", "dodatkowa"
+    if isinstance(text, list):
+        text = " ".join(str(v) for v in text)
+    t = str(text).lower().strip()
+
+    # Неполный день / Part-time
+    if any(x in t for x in [
+        "parttime", "part time", "niepełny", "niepelny", "неполный", "неповний",
+        "1/2", "3/4", "1/4", "2/3", "pół etatu", "pol etatu", "czesc etatu", "część etatu",
+        "dodatkowa", "dorywcza", "student", "студент"
     ]):
         return "part"
-    if any(x in e for x in [
-        "fulltime", "full time", "pełny", "pelny",
-        "cały etat", "caly etat"
+
+    # Полный день / Full-time
+    if any(x in t for x in [
+        "fulltime", "full time", "pełny", "pelny", "pełen", "pelen", "cały etat", "caly etat",
+        "полный", "повний", "1/1", "etatowa"
     ]):
         return "full"
+
     return None
 
 
@@ -251,12 +276,12 @@ def get_active_cities_from_db() -> list:
         return []
 
 
-# ==================== OLX (УЛЬТРА-БЫСТРЫЙ И БЕЗОПАСНЫЙ) ====================
+# ==================== OLX ====================
 
-def extract_olx_params(item: dict):
+def extract_olx_params(item: dict, title: str):
     """
-    Вытаскивает умову и этат прямо из JSON списка ОЛХ.
-    Больше никаких переходов по ссылкам и блокировок Cloudflare!
+    1. Ищет умову и этат в массиве params JSON.
+    2. Если не находит — делает FALLBACK анализ по тексту заголовка (title)!
     """
     umowa_key = None
     etat_key = None
@@ -274,12 +299,16 @@ def extract_olx_params(item: dict):
         else:
             val_label = str(val or "")
             
-        val_label_lower = val_label.lower()
-        
         if "contract" in key or "umow" in key or "umow" in name:
-            umowa_key = normalize_umowa(val_label_lower)
+            umowa_key = normalize_umowa(val_label)
         if "hours" in key or "wymiar" in key or "etat" in name:
-            etat_key = normalize_etat(val_label_lower)
+            etat_key = normalize_etat(val_label)
+
+    # FALLBACK ПО ЗАГОЛОВКУ (TITLE):
+    if not umowa_key:
+        umowa_key = normalize_umowa(title)
+    if not etat_key:
+        etat_key = normalize_etat(title)
             
     return umowa_key, etat_key
 
@@ -376,8 +405,8 @@ async def parse_olx(city: str, existing_ids: set):
                 if city and job_city and not city_matches(job_city, city):
                     continue
 
-                # ВЫТАСКИВАЕМ УМОВУ И ЭТАТ ИЗ JSON (0 СЕКУНД ОЖИДАНИЯ!)
-                umowa_key, etat_key = extract_olx_params(item)
+                # Извлечение с fallback-анализом заголовка
+                umowa_key, etat_key = extract_olx_params(item, title)
 
                 job_id = db_insert_job(
                     ext_id,
@@ -436,7 +465,6 @@ async def parse_praca_pl(city: str, existing_ids: set):
 
                 ext_id = hashlib.md5(f"pracapl_{link}".encode()).hexdigest()
 
-                # Мгновенная проверка дубликата в памяти (0 трафика!)
                 if ext_id in existing_ids:
                     continue
 
@@ -454,33 +482,11 @@ async def parse_praca_pl(city: str, existing_ids: set):
                     continue
 
                 details_el = card.select_one("div.listing__main-details")
-                dt = (
-                    details_el.get_text(" ", strip=True).lower()
-                    if details_el else ""
-                )
+                dt = details_el.get_text(" ", strip=True).lower() if details_el else ""
 
-                umowa_key = None
-                if "umowa o pracę" in dt or "umowa o prace" in dt:
-                    umowa_key = "umowa_o_prace"
-                elif "umowa zlecenie" in dt:
-                    umowa_key = "umowa_zlecenie"
-                elif "kontrakt b2b" in dt or " b2b" in dt:
-                    umowa_key = "b2b"
-                elif "umowa o dzieło" in dt:
-                    umowa_key = "umowa_o_dzielo"
-                elif "staż" in dt or "praktyк" in dt:
-                    umowa_key = "staz"
-
-                etat_key = None
-                if any(x in dt for x in [
-                    "część etatu", "czesc etatu",
-                    "tymczasowa", "dodatkowa", "1/2"
-                ]):
-                    etat_key = "part"
-                elif any(x in dt for x in [
-                    "pełny etat", "pelny etat", "pełen etat"
-                ]):
-                    etat_key = "full"
+                # Извлечение из деталей + fallback по заголовку
+                umowa_key = normalize_umowa(dt) or normalize_umowa(title)
+                etat_key = normalize_etat(dt) or normalize_etat(title)
 
                 job_id = db_insert_job(
                     ext_id, title, job_city, None, link,
@@ -534,7 +540,6 @@ async def parse_gowork(city: str, existing_ids: set):
 
                 ext_id = hashlib.md5(f"gowork_{link}".encode()).hexdigest()
 
-                # Мгновенная проверка дубликата в памяти (0 трафика!)
                 if ext_id in existing_ids:
                     continue
 
@@ -551,26 +556,23 @@ async def parse_gowork(city: str, existing_ids: set):
                     continue
 
                 salary = None
-                umowa_key = None
-                etat_key = None
+                tags_text = []
 
                 for tag in card.select(".g-job-item-content__tag"):
                     for sp in tag.select("span"):
-                        text = sp.get_text(strip=True).lower()
+                        text = sp.get_text(strip=True)
                         if not text:
                             continue
-                        if "zł" in text or "pln" in text:
-                            salary = strip_html(sp.get_text(strip=True))
-                        if "umowa o pracę" in text or "umowa o prace" in text:
-                            umowa_key = "umowa_o_prace"
-                        elif "zlecenie" in text:
-                            umowa_key = "umowa_zlecenie"
-                        elif "b2b" in text or "kontrakt" in text:
-                            umowa_key = "b2b"
-                        if "pełny etat" in text or "pelny etat" in text:
-                            etat_key = "full"
-                        elif "część etatu" in text or "niepełny" in text:
-                            etat_key = "part"
+                        if "zł" in text.lower() or "pln" in text.lower():
+                            salary = strip_html(text)
+                        else:
+                            tags_text.append(text)
+
+                combined_tags = " ".join(tags_text)
+                
+                # Извлечение из тегов + fallback по заголовку
+                umowa_key = normalize_umowa(combined_tags) or normalize_umowa(title)
+                etat_key = normalize_etat(combined_tags) or normalize_etat(title)
 
                 job_id = db_insert_job(
                     ext_id, title, job_city, salary, link,
@@ -594,10 +596,8 @@ async def parse_gowork(city: str, existing_ids: set):
 # ==================== АСИНХРОННЫЙ ДИСПЕТЧЕР ГОРОДОВ ====================
 
 async def scrape_city_task(city: str, existing_ids: set, semaphore: asyncio.Semaphore) -> int:
-    """Параллельно парсит источники внутри одного города"""
     async with semaphore:
         logger.info(f"=== Starting parallel scrape for {city} ===")
-        # Запускаем все три источника (OLX, Praca, GoWork) параллельно для этого города
         results = await asyncio.gather(
             parse_olx(city, existing_ids),
             parse_praca_pl(city, existing_ids),
@@ -631,7 +631,7 @@ async def main():
     else:
         logger.info("⏭ Cleanup skipped (runs once a day at 08:00 AM Warsaw time).")
 
-    # ЗАГРУЖАЕМ ВСЕ СУЩЕСТВУЮЩИЕ ID ИЗ БАЗЫ ОДНИМ ПАКЕТОМ
+    # Считываем кэш ID
     existing_ids = get_all_existing_ids()
 
     # ОПРЕДЕЛЯЕМ ГОРОДА ДЛЯ СКАНИРОВАНИЯ
@@ -639,13 +639,11 @@ async def main():
         cities = [args.city]
         logger.info(f"🔍 On-demand scrape for city: {args.city}")
     else:
-        # Пытаемся получить только те города, где сидят активные юзеры
         db_cities = get_active_cities_from_db()
         if db_cities:
             cities = db_cities
             logger.info(f"Smart scrape: Scanning active cities: {cities}")
         else:
-            # Если база пустая или произошла ошибка — сканируем 5 дефолтных главных городов, чтобы наполнить базу
             cities = MAIN_SCAN_CITIES[:5]
             logger.info(f"Fallback scrape: Scanning top 5 main cities: {cities}")
 
@@ -655,7 +653,6 @@ async def main():
     for city in cities:
         tasks.append(scrape_city_task(city, existing_ids, city_sem))
 
-    # Сбор всех асинхронных задач
     results = await asyncio.gather(*tasks)
     total = sum(results)
 
