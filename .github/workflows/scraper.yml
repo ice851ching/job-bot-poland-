@@ -2,9 +2,8 @@ name: scraper
 
 on:
   schedule:
-    # Запуск каждые 30 минут (:00 и :30) с 06:00 до 21:59 по UTC
-    # По Польше это как раз примерно с 08:00 до 23:00 (с учетом летнего/зимнего времени)
-    - cron: "0,30 6-21 * * *"
+    # Смещаем минуты, чтобы обойти пики нагрузки GitHub (:17 и :47)
+    - cron: "17,47 6-21 * * *"
   workflow_dispatch:
     inputs:
       city:
@@ -12,9 +11,15 @@ on:
         required: false
         default: ""
 
+# Не дает запустить 2 парсера одновременно, убивает зависший прошлый
+concurrency:
+  group: scraper-group
+  cancel-in-progress: true
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # Завершит ранер, если он подвис более чем на 10 минут
 
     steps:
       - name: Checkout repo
