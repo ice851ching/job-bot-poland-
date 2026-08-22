@@ -1,4 +1,4 @@
-import os
+mport os
 import asyncio
 import logging
 import re
@@ -13,6 +13,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 )
 from aiogram.filters import Command
+from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -515,15 +516,17 @@ def db_get_sent_job_ids(tid) -> set:
         return set()
 
 
-def db_mark_sent_batch(tid, job_ids: list):
-    """Пакетная вставка отправленных вакансий — 1 запрос вместо десятков"""
+def db_mark_sent_batch(tid, job_ids: list) -> bool:
+    """Пакетная вставка отправленных вакансий — 1 запрос вместо десятков."""
     if not job_ids:
-        return
+        return True
     try:
         records = [{"telegram_id": tid, "job_id": jid} for jid in job_ids]
         supabase.table("sent_jobs").insert(records).execute()
+        return True
     except Exception as e:
         logger.error(f"db_mark_sent_batch error for {tid}: {e}")
+        return False
 
 
 def db_clear_sent(tid):
@@ -658,6 +661,12 @@ async def send_promo(chat_id):
 
 
 async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=False):
+    """
+    Отправляет вакансии одному пользователю.
+
+    Важный принцип: запись в sent_jobs делаем только после успешной отправки
+    сообщения в Telegram. Поэтому рестарт бота не должен терять вакансии.
+    """
     sent, sf, ss, blocked = 0, 0, 0, 0
     already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, tid)
     sent_job_ids_batch = []
@@ -665,30 +674,88 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
     for job in jobs:
         if sent >= limit:
             break
+
+        job_id = job.get("id")
+        if job_id is None:
+            continue
+
         if is_delivery_job(job):
             blocked += 1
             continue
+
         if user_filter and not job_matches_filter(job, user_filter):
             sf += 1
             continue
-        if job['id'] in already_sent_ids:
+
+        if job_id in already_sent_ids:
             ss += 1
             continue
+
         try:
-            await bot.send_message(tid, format_job(job), parse_mode="HTML", disable_web_page_preview=True)
-            sent_job_ids_batch.append(job['id'])
+            await bot.send_message(
+                tid,
+                format_job(job),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+            sent_job_ids_batch.append(job_id)
+            already_sent_ids.add(job_id)
             sent += 1
+
+            # Небольшая пауза только между сообщениями одного пользователя.
             await asyncio.sleep(0.05)
-        except Exception as e:
-            logger.warning(f"send to {tid} error: {e}")
+
+        except TelegramRetryAfter as e:
+            # Telegram попросил подождать. Ждём указанное время и повторяем
+            # именно это сообщение, не помечая вакансию отправленной заранее.
+            retry_after = max(1, int(getattr(e, "retry_after", 1)))
+            logger.warning(f"Telegram rate limit for {tid}; sleeping {retry_after}s")
+            await asyncio.sleep(retry_after)
+            try:
+                await bot.send_message(
+                    tid,
+                    format_job(job),
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+                sent_job_ids_batch.append(job_id)
+                already_sent_ids.add(job_id)
+                sent += 1
+            except TelegramForbiddenError:
+                logger.warning(f"send to {tid}: bot was blocked by user")
+                await asyncio.to_thread(db_set_user_active, tid, False)
+                await asyncio.to_thread(db_delete_filter, tid)
+                blocked += 1
+                break
+            except Exception as retry_error:
+                logger.warning(f"retry send to {tid} error: {retry_error}")
+                break
+
+        except TelegramForbiddenError:
+            # Заблокировавший бота пользователь больше не должен попадать
+            # в каждый 15-минутный проход scheduler.
+            logger.warning(f"send to {tid}: bot was blocked by user")
             await asyncio.to_thread(db_set_user_active, tid, False)
+            await asyncio.to_thread(db_delete_filter, tid)
+            blocked += 1
             break
 
-    # Пакетное сохранение в Supabase (1 сетевой запрос вместо N)
-    if sent_job_ids_batch:
-        await asyncio.to_thread(db_mark_sent_batch, tid, sent_job_ids_batch)
+        except Exception as e:
+            logger.warning(f"send to {tid} error: {e}")
+            # Не удаляем фильтр при временной ошибке Telegram/сети.
+            break
 
-    logger.info(f"Sent={sent} filtered={sf} already={ss} blocked={blocked}")
+    if sent_job_ids_batch:
+        ok = await asyncio.to_thread(db_mark_sent_batch, tid, sent_job_ids_batch)
+        if not ok:
+            logger.error(
+                f"sent_jobs insert failed for {tid}; {len(sent_job_ids_batch)} jobs "
+                "were delivered but not marked as sent"
+            )
+
+    logger.info(
+        f"User {tid}: Sent={sent} filtered={sf} already={ss} blocked={blocked}"
+    )
 
     if is_initial:
         lang = await asyncio.to_thread(get_user_lang, tid)
@@ -1053,64 +1120,153 @@ async def on_renew_search(c: CallbackQuery):
 # ==================== SCHEDULER (НЕБЛОКИРУЮЩИЙ) ====================
 
 async def scheduled_check():
+    """
+    Основной цикл новых вакансий.
+
+    - один scheduler instance одновременно;
+    - города загружаются параллельно;
+    - пользователи обрабатываются с ограниченной конкуренцией;
+    - ошибка одного пользователя не останавливает остальных;
+    - CancelledError при остановке Render корректно пробрасывается дальше.
+    """
+    started = datetime.now(timezone.utc)
+
     if is_night_time():
         logger.info("🌙 Night time — skipping scheduled check.")
         return
 
     logger.info("⏰ Check started")
-    filters = await asyncio.to_thread(db_get_active_filters)
-    if not filters:
-        logger.info("No active filters found.")
-        return
 
-    now = datetime.now(timezone.utc)
-    active_filters = []
+    try:
+        filters = await asyncio.to_thread(db_get_active_filters)
+        logger.info(f"👥 Active filters: {len(filters)}")
 
-    for f in filters:
-        tid = f["telegram_id"]
+        if not filters:
+            logger.info("No active filters found.")
+            return
 
-        last_renewal_str = f.get("last_renewal")
-        if last_renewal_str:
-            try:
-                last_renewal = datetime.fromisoformat(last_renewal_str.replace("Z", "+00:00"))
-                if (now - last_renewal).total_seconds() > 259200:  # 3 дня
-                    await asyncio.to_thread(db_pause_search_filter, tid)
-                    lang = await asyncio.to_thread(get_user_lang, tid)
-                    try:
-                        await bot.send_message(tid, t(lang, "search_paused"), parse_mode="HTML", reply_markup=kb_renew_search(lang))
-                        logger.info(f"⏸ Paused user {tid} due to 3-day inactivity.")
-                    except Exception:
-                        await asyncio.to_thread(db_set_user_active, tid, False)
-                    continue
-            except Exception as e:
-                logger.error(f"Error parsing last_renewal for {tid}: {e}")
+        now = datetime.now(timezone.utc)
+        active_filters = []
 
-        active_filters.append(f)
+        # Проверяем 3-дневное продление.
+        for f in filters:
+            tid = f["telegram_id"]
+            last_renewal_str = f.get("last_renewal")
 
-    if not active_filters:
-        return
+            if last_renewal_str:
+                try:
+                    last_renewal = datetime.fromisoformat(
+                        last_renewal_str.replace("Z", "+00:00")
+                    )
+                    if (now - last_renewal).total_seconds() > 259200:
+                        await asyncio.to_thread(db_pause_search_filter, tid)
+                        lang = await asyncio.to_thread(get_user_lang, tid)
+                        try:
+                            await bot.send_message(
+                                tid,
+                                t(lang, "search_paused"),
+                                parse_mode="HTML",
+                                reply_markup=kb_renew_search(lang),
+                            )
+                            logger.info(
+                                f"⏸ Paused user {tid} due to 3-day inactivity."
+                            )
+                        except TelegramForbiddenError:
+                            await asyncio.to_thread(db_set_user_active, tid, False)
+                        except Exception as e:
+                            logger.warning(f"pause notification error for {tid}: {e}")
+                        continue
+                except Exception as e:
+                    logger.error(f"Error parsing last_renewal for {tid}: {e}")
 
-    cities = list(set(f.get("city", "all") for f in active_filters))
-    city_jobs = {}
-    for city in cities:
-        city_jobs[city] = await asyncio.to_thread(db_get_jobs_for_city, city, 100, 24)
-        await asyncio.sleep(0.05)
+            active_filters.append(f)
 
-    for f in active_filters:
-        tid = f["telegram_id"]
-        city = f.get("city", "all")
-        jobs = city_jobs.get(city, [])
-        uf = {
-            "umowa": f.get("umowa", "any"),
-            "etat_full": f.get("etat_full", True),
-            "etat_part": f.get("etat_part", False),
-        }
-        if jobs:
-            sent = await send_jobs_to_user(tid, jobs, user_filter=uf, limit=15)
-            if sent > 0:
-                logger.info(f"Sent {sent} to {tid}")
+        if not active_filters:
+            logger.info("No filters left after renewal check.")
+            return
 
-    logger.info("✅ Done")
+        cities = list({f.get("city", "all") for f in active_filters})
+        logger.info(f"🏙 Loading jobs for {len(cities)} cities: {cities}")
+
+        # Загружаем города параллельно, чтобы 15-минутный цикл не растягивался
+        # на десятки последовательных HTTP-запросов.
+        city_results = await asyncio.gather(
+            *(
+                asyncio.to_thread(db_get_jobs_for_city, city, 100, 24)
+                for city in cities
+            ),
+            return_exceptions=True,
+        )
+
+        city_jobs = {}
+        for city, result in zip(cities, city_results):
+            if isinstance(result, Exception):
+                logger.error(f"❌ Failed loading jobs for {city}: {result}")
+                city_jobs[city] = []
+            else:
+                city_jobs[city] = result or []
+                logger.info(f"📦 {city}: {len(city_jobs[city])} jobs")
+
+        # Не создаём сотни одновременных Telegram запросов.
+        # 8 пользователей одновременно обычно даёт хороший баланс скорости
+        # и защиты от rate limits.
+        semaphore = asyncio.Semaphore(8)
+
+        async def process_user(f):
+            tid = f["telegram_id"]
+            city = f.get("city", "all")
+            jobs = city_jobs.get(city, [])
+            uf = {
+                "umowa": f.get("umowa", "any"),
+                "etat_full": f.get("etat_full", True),
+                "etat_part": f.get("etat_part", False),
+            }
+
+            if not jobs:
+                logger.info(f"👤 {tid}: no fresh jobs for {city}")
+                return 0
+
+            async with semaphore:
+                try:
+                    return await send_jobs_to_user(
+                        tid, jobs, user_filter=uf, limit=15
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.exception(f"❌ User {tid} processing error: {e}")
+                    return 0
+
+        results = await asyncio.gather(
+            *(process_user(f) for f in active_filters),
+            return_exceptions=True,
+        )
+
+        total_sent = 0
+        for result in results:
+            if isinstance(result, int):
+                total_sent += result
+            elif isinstance(result, Exception):
+                logger.error(f"User task failed: {result}")
+
+        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+        logger.info(
+            f"✅ Done: users={len(active_filters)}, cities={len(cities)}, "
+            f"sent={total_sent}, duration={elapsed:.1f}s"
+        )
+
+    except asyncio.CancelledError:
+        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+        logger.warning(
+            f"🛑 Scheduled check cancelled after {elapsed:.1f}s "
+            "(service is shutting down/restarting)"
+        )
+        raise
+    except Exception as e:
+        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+        logger.exception(
+            f"❌ scheduled_check crashed after {elapsed:.1f}s: {e}"
+        )
 
 
 # ==================== MAIN ====================
@@ -1119,12 +1275,31 @@ async def main():
     logger.info("🚀 Bot starting...")
     await start_web_server()
 
-    s = AsyncIOScheduler()
-    s.add_job(scheduled_check, "interval", minutes=15, id="check", replace_existing=True)
+    s = AsyncIOScheduler(timezone="UTC")
+    s.add_job(
+        scheduled_check,
+        "interval",
+        minutes=15,
+        id="check",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=10),
+    )
     s.start()
 
-    logger.info("⏰ Scheduler started")
-    await dp.start_polling(bot)
+    logger.info("⏰ Scheduler started: first check in 10s, then every 15m")
+
+    try:
+        await dp.start_polling(bot)
+    finally:
+        logger.info("🛑 Shutting down scheduler...")
+        try:
+            s.shutdown(wait=False)
+        except Exception as e:
+            logger.warning(f"Scheduler shutdown error: {e}")
+        await bot.session.close()
 
 
 if __name__ == "__main__":
