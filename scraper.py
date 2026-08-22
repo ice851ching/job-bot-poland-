@@ -6,7 +6,6 @@ import logging
 import json
 import re
 import argparse
-import random
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -43,7 +42,7 @@ CITY_SLUGS = {
     "szczecin": "szczecin", "bydgoszcz": "bydgoszcz",
     "białystok": "bialystok", "bialystok": "bialystok",
     "gdynia": "gdynia",
-    "częstochowa": "czestochowa", "częstochowa": "czestochowa",
+    "częstochowa": "czestochowa",
     "sosnowiec": "sosnowiec",
     "rzeszów": "rzeszow", "rzeszow": "rzeszow",
     "kielce": "kielce", "gliwice": "gliwice",
@@ -279,10 +278,9 @@ def get_active_cities_from_db() -> list:
         return []
 
 
-# ==================== OLX (УЛЬТРА-СОВРЕМЕННЫЙ ПАРСЕР КАРТОЧЕК) ====================
+# ==================== OLX (JSON + HTML FALLBACK) ====================
 
 def extract_all_text_from_node(obj):
-    """Рекурсивный сбор абсолютно всех текстовых значений из вложенных JSON-узлов"""
     texts = []
     if isinstance(obj, dict):
         for k, v in obj.items():
@@ -299,7 +297,6 @@ def extract_all_text_from_node(obj):
 
 
 def extract_olx_params_json(item: dict, title: str, salary: str):
-    """Глубокий разбор массива params без потери сложных и составных типов контрактов"""
     umowa_texts = []
     etat_texts = []
     params = item.get("params", [])
@@ -310,7 +307,6 @@ def extract_olx_params_json(item: dict, title: str, salary: str):
         key = str(p.get("key") or "").lower()
         name = str(p.get("name") or "").lower()
         
-        # Рекурсивно вытягиваем весь текст из узла параметра
         node_texts = extract_all_text_from_node(p)
         joined_text = " ".join(node_texts)
         
@@ -322,10 +318,13 @@ def extract_olx_params_json(item: dict, title: str, salary: str):
     umowa_key = normalize_umowa(" ".join(umowa_texts))
     etat_key = normalize_etat(" ".join(etat_texts), salary)
 
+    if not umowa_key:
+        umowa_key = normalize_umowa(title)
+    if not etat_key:
+        etat_key = normalize_etat(title, salary)
+            
     return umowa_key, etat_key
 
-
-# ==================== HTML FALLBACK ДЛЯ OLX ====================
 
 def extract_olx_params_from_html(card_soup, title, salary):
     """Вытягивает etat и umowa напрямую из HTML карточки OLX"""
@@ -358,15 +357,12 @@ async def parse_olx(city: str, existing_ids: set):
 
         soup = BeautifulSoup(html, "html.parser")
         
-        # Считываем все HTML карточки и индексируем их по ссылкам
-        html_cards = soup.select('div[data-cy="l-card"]') or soup.select('div[data-testid="l-card"]') or soup.select('div.jobs-ad-card')
-        card_map = {}
-        for card in html_cards:
-            title_el = card.select_one('a[data-testid="card-title-link"]') or card.select_one('a')
-            if title_el and title_el.get('href'):
-                # Очищаем ссылки для точного сопоставления
-                link_href = title_el.get('href').split('?')[0].split('#')[0].replace("https://www.olx.pl", "")
-                card_map[link_href] = card
+        # Собираем словарь карточек из HTML по ID для фолбека
+        html_cards = {}
+        for card in soup.select("div[data-cy='l-card']"):
+            card_id = card.get("id")
+            if card_id:
+                html_cards[str(card_id)] = card
 
         # Парсим JSON-состояние страницы
         data = None
@@ -433,26 +429,17 @@ async def parse_olx(city: str, existing_ids: set):
                 if city and job_city and not city_matches(job_city, city):
                     continue
 
-                # 1. Сначала пробуем вытащить параметры из JSON
+                # 1. Сначала пробуемJSON
                 umowa_key, etat_key = extract_olx_params_json(item, title, salary)
 
-                # 2. Если параметры не определились — используем HTML-FALLBACK
-                if not umowa_key or not etat_key:
-                    cleaned_link = link.replace("https://www.olx.pl", "").split('?')[0].split('#')[0]
-                    matched_card = card_map.get(cleaned_link)
-                    
-                    if matched_card:
-                        html_umowa, html_etat = extract_olx_params_from_html(matched_card, title, salary)
-                        if not umowa_key:
-                            umowa_key = html_umowa
-                        if not etat_key:
-                            etat_key = html_etat
-
-                # 3. Финальный fallback по заголовку
-                if not umowa_key:
-                    umowa_key = normalize_umowa(title)
-                if not etat_key:
-                    etat_key = normalize_etat(title, salary)
+                # 2. Если JSON дал NULL/None — берем HTML-карточку
+                item_id = str(item.get("id") or "")
+                if (not umowa_key or not etat_key) and item_id in html_cards:
+                    html_umowa, html_etat = extract_olx_params_from_html(html_cards[item_id], title, salary)
+                    if not umowa_key:
+                        umowa_key = html_umowa
+                    if not etat_key:
+                        etat_key = html_etat
 
                 job_id = db_insert_job(
                     ext_id,
