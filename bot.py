@@ -616,6 +616,7 @@ async def health_check(request):
 async def start_web_server():
     app = web.Application()
     app.router.add_get("/", health_check)
+    app.router.add_get("/ping", health_check)
     app.router.add_get("/health", health_check)
     runner = web.AppRunner(app)
     await runner.setup()
@@ -1124,7 +1125,7 @@ async def scheduled_check():
     Основной цикл новых вакансий.
 
     - один scheduler instance одновременно;
-    - города загружаются параллельно;
+    - города загружаются контролируемо (с использованием семафора);
     - пользователи обрабатываются с ограниченной конкуренцией;
     - ошибка одного пользователя не останавливает остальных;
     - CancelledError при остановке Render корректно пробрасывается дальше.
@@ -1188,13 +1189,16 @@ async def scheduled_check():
         cities = list({f.get("city", "all") for f in active_filters})
         logger.info(f"🏙 Loading jobs for {len(cities)} cities: {cities}")
 
-        # Загружаем города параллельно, чтобы 15-минутный цикл не растягивался
-        # на десятки последовательных HTTP-запросов.
+        # Ограничиваем количество одновременных запросов к БД до 3,
+        # чтобы не класть Event Loop и соединения Supabase.
+        db_semaphore = asyncio.Semaphore(3)
+
+        async def fetch_jobs_safe(city):
+            async with db_semaphore:
+                return await asyncio.to_thread(db_get_jobs_for_city, city, 100, 24)
+
         city_results = await asyncio.gather(
-            *(
-                asyncio.to_thread(db_get_jobs_for_city, city, 100, 24)
-                for city in cities
-            ),
+            *(fetch_jobs_safe(city) for city in cities),
             return_exceptions=True,
         )
 
@@ -1208,8 +1212,6 @@ async def scheduled_check():
                 logger.info(f"📦 {city}: {len(city_jobs[city])} jobs")
 
         # Не создаём сотни одновременных Telegram запросов.
-        # 8 пользователей одновременно обычно даёт хороший баланс скорости
-        # и защиты от rate limits.
         semaphore = asyncio.Semaphore(8)
 
         async def process_user(f):
