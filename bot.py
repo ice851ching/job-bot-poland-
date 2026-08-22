@@ -122,7 +122,6 @@ UMOWY = [
     ("Staż / Praktyki", "staz"),
 ]
 
-# Исправлено: имя переменной зафиксировано как UMOWY_DISPLAY
 UMOWY_DISPLAY = {
     "umowa_o_prace": "Umowa o pracę",
     "umowa_zlecenie": "Umowa zlecenie",
@@ -236,8 +235,8 @@ TEXTS = {
         "btn_custom": "✏️ Inne miasto",
         "btn_done": "✅ Gotowe",
         "after_initial": (
-            "👆 To были остатки последних актуальных вакансий.\n\n"
-            "🔄 Bot будет теперь отправлять только новые вакансии по мере их появления."
+            "👆 To były ostatnie aktualne oferty z dzisiaj.\n\n"
+            "🔄 Bot będzie teraz wysyłać tylko nowe oferty na bieżąco."
         ),
         "search_paused": (
             "⏸ <b>Wyszukiwanie wstrzymane</b>\n\n"
@@ -378,7 +377,7 @@ def normalize_etat(etat):
     return None
 
 
-# ==================== УМНЫЙ ЛОЯЛЬНЫЙ ФИЛЬТР (EGRESS + CONVERSION FIX) ====================
+# ==================== УМНЫЙ ЛОЯЛЬНЫЙ ФИЛЬТР ====================
 
 def job_matches_filter(job, user_filter):
     uf = user_filter.get("umowa", "any")
@@ -516,11 +515,15 @@ def db_get_sent_job_ids(tid) -> set:
         return set()
 
 
-def db_mark_sent(tid, jid):
+def db_mark_sent_batch(tid, job_ids: list):
+    """Пакетная вставка отправленных вакансий — 1 запрос вместо десятков"""
+    if not job_ids:
+        return
     try:
-        supabase.table("sent_jobs").insert({"telegram_id": tid, "job_id": jid}).execute()
-    except:
-        pass
+        records = [{"telegram_id": tid, "job_id": jid} for jid in job_ids]
+        supabase.table("sent_jobs").insert(records).execute()
+    except Exception as e:
+        logger.error(f"db_mark_sent_batch error for {tid}: {e}")
 
 
 def db_clear_sent(tid):
@@ -595,7 +598,7 @@ async def trigger_scraper_for_city(city: str) -> bool:
 async def wait_for_city_jobs(city: str, attempts: int = 10, delay: int = 6):
     for i in range(attempts):
         await asyncio.sleep(delay)
-        jobs = db_get_jobs_for_city(city, limit=150, hours=1)
+        jobs = await asyncio.to_thread(db_get_jobs_for_city, city, 150, 1)
         if jobs:
             return jobs
     return []
@@ -651,12 +654,13 @@ async def send_promo(chat_id):
         except Exception:
             pass
     except Exception as e:
-        logger.error(f"promo: {e}")
+        logger.error(f"promo error: {e}")
 
 
 async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=False):
     sent, sf, ss, blocked = 0, 0, 0, 0
-    already_sent_ids = db_get_sent_job_ids(tid)
+    already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, tid)
+    sent_job_ids_batch = []
 
     for job in jobs:
         if sent >= limit:
@@ -672,16 +676,22 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
             continue
         try:
             await bot.send_message(tid, format_job(job), parse_mode="HTML", disable_web_page_preview=True)
-            db_mark_sent(tid, job['id'])
+            sent_job_ids_batch.append(job['id'])
             sent += 1
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
         except Exception as e:
-            logger.error(f"send error: {e}")
+            logger.warning(f"send to {tid} error: {e}")
+            await asyncio.to_thread(db_set_user_active, tid, False)
+            break
+
+    # Пакетное сохранение в Supabase (1 сетевой запрос вместо N)
+    if sent_job_ids_batch:
+        await asyncio.to_thread(db_mark_sent_batch, tid, sent_job_ids_batch)
 
     logger.info(f"Sent={sent} filtered={sf} already={ss} blocked={blocked}")
 
     if is_initial:
-        lang = get_user_lang(tid)
+        lang = await asyncio.to_thread(get_user_lang, tid)
         if sent > 0:
             try:
                 await bot.send_message(tid, t(lang, "after_initial"))
@@ -763,8 +773,8 @@ async def run_broadcast(bot: Bot, admin_id: int, from_chat_id: int, message_id: 
             await bot.copy_message(chat_id=uid, from_chat_id=from_chat_id, message_id=message_id)
             sent += 1
             await asyncio.sleep(0.05)
-        except Exception as e:
-            db_set_user_active(uid, False)
+        except Exception:
+            await asyncio.to_thread(db_set_user_active, uid, False)
             failed += 1
             
     try:
@@ -780,17 +790,23 @@ async def run_broadcast(bot: Bot, admin_id: int, from_chat_id: int, message_id: 
 
 @router.message(Command("admin"), F.from_user.id == ADMIN_ID)
 async def cmd_admin(m: Message, state: FSMContext):
-    await state.clear()
-    await state.set_state(AdminStates.waiting_for_ad)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel")]])
-    await m.answer("👑 <b>Админ-панель:</b>\n\nОтправь мне сообщение для рассылки.", parse_mode="HTML", reply_markup=kb)
+    try:
+        await state.clear()
+        await state.set_state(AdminStates.waiting_for_ad)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel")]])
+        await m.answer("👑 <b>Админ-панель:</b>\n\nОтправь мне сообщение для рассылки.", parse_mode="HTML", reply_markup=kb)
+    except Exception as e:
+        logger.warning(f"cmd_admin error: {e}")
 
 
 @router.callback_query(F.data == "admin_cancel", F.from_user.id == ADMIN_ID)
 async def admin_cancel(c: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await c.message.edit_text("❌ Рассылка отменена.")
-    await c.answer()
+    try:
+        await state.clear()
+        await c.message.edit_text("❌ Рассылка отменена.")
+        await c.answer()
+    except Exception as e:
+        logger.warning(f"admin_cancel error: {e}")
 
 
 @router.message(AdminStates.waiting_for_ad, F.from_user.id == ADMIN_ID)
@@ -816,7 +832,7 @@ async def admin_send_ad(c: CallbackQuery, state: FSMContext):
         msg_id, chat_id = data.get("ad_msg_id"), data.get("ad_chat_id")
         await state.clear()
         
-        users = db_get_all_active_users()
+        users = await asyncio.to_thread(db_get_all_active_users)
         if not users:
             await c.message.answer("❌ Нет активных пользователей!")
             return
@@ -829,45 +845,58 @@ async def admin_send_ad(c: CallbackQuery, state: FSMContext):
 
 @router.message(Command("start"))
 async def cmd_start(m: Message, state: FSMContext):
-    await state.clear()
-    db_upsert_user(m.from_user.id, m.from_user.username)
-    db_set_user_active(m.from_user.id, True)
-    db_clear_sent(m.from_user.id)
-    await state.update_data(lang="ru", etat={"full": False, "part": False})
-    await state.set_state(SetupStates.lang)
-    await m.answer("⚙️", reply_markup=ReplyKeyboardRemove())
-    await m.answer(t("ru", "welcome"), reply_markup=kb_lang())
+    try:
+        await state.clear()
+        await asyncio.to_thread(db_upsert_user, m.from_user.id, m.from_user.username)
+        await asyncio.to_thread(db_set_user_active, m.from_user.id, True)
+        await asyncio.to_thread(db_clear_sent, m.from_user.id)
+        await state.update_data(lang="ru", etat={"full": False, "part": False})
+        await state.set_state(SetupStates.lang)
+        await m.answer("⚙️", reply_markup=ReplyKeyboardRemove())
+        await m.answer(t("ru", "welcome"), reply_markup=kb_lang())
+    except Exception as e:
+        logger.warning(f"cmd_start error for {m.from_user.id}: {e}")
 
 
 @router.message(Command("reset"))
 async def cmd_reset(m: Message, state: FSMContext):
-    await state.clear()
-    lang = get_user_lang(m.from_user.id)
-    db_delete_filter(m.from_user.id)
-    db_clear_sent(m.from_user.id)
-    db_set_user_active(m.from_user.id, True)
-    await state.update_data(lang=lang, etat={"full": False, "part": False})
-    await state.set_state(SetupStates.lang)
-    await m.answer("⚙️", reply_markup=ReplyKeyboardRemove())
-    await m.answer(t(lang, "reset_msg"), reply_markup=kb_lang())
+    try:
+        await state.clear()
+        lang = await asyncio.to_thread(get_user_lang, m.from_user.id)
+        await asyncio.to_thread(db_delete_filter, m.from_user.id)
+        await asyncio.to_thread(db_clear_sent, m.from_user.id)
+        await asyncio.to_thread(db_set_user_active, m.from_user.id, True)
+        await state.update_data(lang=lang, etat={"full": False, "part": False})
+        await state.set_state(SetupStates.lang)
+        await m.answer("⚙️", reply_markup=ReplyKeyboardRemove())
+        await m.answer(t(lang, "reset_msg"), reply_markup=kb_lang())
+    except Exception as e:
+        logger.warning(f"cmd_reset error: {e}")
 
 
 @router.message(Command("stop"))
 async def cmd_stop(m: Message, state: FSMContext):
-    await state.clear()
-    lang = get_user_lang(m.from_user.id)
-    if not db_get_filter(m.from_user.id):
-        await m.answer(t(lang, "already_stopped"), reply_markup=kb_stopped_menu())
-        return
-    db_delete_filter(m.from_user.id)
-    db_set_user_active(m.from_user.id, False)
-    await m.answer(t(lang, "stop_donate"), parse_mode="HTML", reply_markup=kb_stopped_menu())
+    try:
+        await state.clear()
+        lang = await asyncio.to_thread(get_user_lang, m.from_user.id)
+        has_filter = await asyncio.to_thread(db_get_filter, m.from_user.id)
+        if not has_filter:
+            await m.answer(t(lang, "already_stopped"), reply_markup=kb_stopped_menu())
+            return
+        await asyncio.to_thread(db_delete_filter, m.from_user.id)
+        await asyncio.to_thread(db_set_user_active, m.from_user.id, False)
+        await m.answer(t(lang, "stop_donate"), parse_mode="HTML", reply_markup=kb_stopped_menu())
+    except Exception as e:
+        logger.warning(f"cmd_stop error: {e}")
 
 
 @router.message(Command("help"))
 async def cmd_help(m: Message):
-    lang = get_user_lang(m.from_user.id)
-    await m.answer(t(lang, "help"), parse_mode="HTML")
+    try:
+        lang = await asyncio.to_thread(get_user_lang, m.from_user.id)
+        await m.answer(t(lang, "help"), parse_mode="HTML")
+    except Exception as e:
+        logger.warning(f"cmd_help error: {e}")
 
 
 @router.message(F.text == BTN_RESET)
@@ -892,119 +921,136 @@ async def btn_restart(m: Message, state: FSMContext):
 
 @router.callback_query(SetupStates.lang, F.data.startswith("l_"))
 async def on_lang(c: CallbackQuery, state: FSMContext):
-    lang = c.data[2:]
-    await state.update_data(lang=lang)
     try:
-        supabase.table("users").update({"language": lang}).eq("telegram_id", c.from_user.id).execute()
-    except Exception:
-        pass
-    await state.set_state(SetupStates.city)
-    await c.message.edit_text(t(lang, "choose_city"), reply_markup=kb_cities(lang))
-    await c.answer()
+        lang = c.data[2:]
+        await state.update_data(lang=lang)
+        await asyncio.to_thread(
+            lambda: supabase.table("users").update({"language": lang}).eq("telegram_id", c.from_user.id).execute()
+        )
+        await state.set_state(SetupStates.city)
+        await c.message.edit_text(t(lang, "choose_city"), reply_markup=kb_cities(lang))
+        await c.answer()
+    except Exception as e:
+        logger.warning(f"on_lang error: {e}")
 
 
 @router.callback_query(SetupStates.city, F.data.startswith("c_"))
 async def on_city(c: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    lang = data.get("lang", "ru")
-    val = c.data[2:]
-    if val == "custom":
-        await state.set_state(SetupStates.city_custom)
-        await c.message.edit_text(t(lang, "enter_city"))
+    try:
+        data = await state.get_data()
+        lang = data.get("lang", "ru")
+        val = c.data[2:]
+        if val == "custom":
+            await state.set_state(SetupStates.city_custom)
+            await c.message.edit_text(t(lang, "enter_city"))
+            await c.answer()
+            return
+        cd = t(lang, "btn_all") if val == "all" else val
+        await state.update_data(city=val, city_display=cd)
+        await state.set_state(SetupStates.etat)
+        sel = data.get("etat", {"full": False, "part": False})
+        await c.message.edit_text(t(lang, "choose_etat"), reply_markup=kb_etat(lang, sel))
         await c.answer()
-        return
-    cd = t(lang, "btn_all") if val == "all" else val
-    await state.update_data(city=val, city_display=cd)
-    await state.set_state(SetupStates.etat)
-    sel = data.get("etat", {"full": False, "part": False})
-    await c.message.edit_text(t(lang, "choose_etat"), reply_markup=kb_etat(lang, sel))
-    await c.answer()
+    except Exception as e:
+        logger.warning(f"on_city error: {e}")
 
 
 @router.message(SetupStates.city_custom, ~F.text.in_({BTN_RESET, BTN_STOP, BTN_HELP, BTN_RESTART}))
 async def on_city_custom(m: Message, state: FSMContext):
-    data = await state.get_data()
-    lang = data.get("lang", "ru")
-    city = m.text.strip()
-    await state.update_data(city=city, city_display=city)
-    await state.set_state(SetupStates.etat)
-    sel = data.get("etat", {"full": False, "part": False})
-    await m.answer(t(lang, "choose_etat"), reply_markup=kb_etat(lang, sel))
+    try:
+        data = await state.get_data()
+        lang = data.get("lang", "ru")
+        city = m.text.strip()
+        await state.update_data(city=city, city_display=city)
+        await state.set_state(SetupStates.etat)
+        sel = data.get("etat", {"full": False, "part": False})
+        await m.answer(t(lang, "choose_etat"), reply_markup=kb_etat(lang, sel))
+    except Exception as e:
+        logger.warning(f"on_city_custom error: {e}")
 
 
 @router.callback_query(SetupStates.etat, F.data.startswith("e_"))
 async def on_etat(c: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    lang = data.get("lang", "ru")
-    sel = data.get("etat", {"full": False, "part": False})
-    action = c.data[2:]
-    if action == "done":
-        if not sel.get("full") and not sel.get("part"):
-            sel = {"full": True, "part": True}
+    try:
+        data = await state.get_data()
+        lang = data.get("lang", "ru")
+        sel = data.get("etat", {"full": False, "part": False})
+        action = c.data[2:]
+        if action == "done":
+            if not sel.get("full") and not sel.get("part"):
+                sel = {"full": True, "part": True}
+            await state.update_data(etat=sel)
+            await state.set_state(SetupStates.umowa)
+            await c.message.edit_text(t(lang, "choose_umowa"), reply_markup=kb_umowa())
+            await c.answer()
+            return
+        if action == "full":
+            sel["full"] = not sel.get("full", False)
+        elif action == "part":
+            sel["part"] = not sel.get("part", False)
         await state.update_data(etat=sel)
-        await state.set_state(SetupStates.umowa)
-        await c.message.edit_text(t(lang, "choose_umowa"), reply_markup=kb_umowa())
+        await c.message.edit_reply_markup(reply_markup=kb_etat(lang, sel))
         await c.answer()
-        return
-    if action == "full":
-        sel["full"] = not sel.get("full", False)
-    elif action == "part":
-        sel["part"] = not sel.get("part", False)
-    await state.update_data(etat=sel)
-    await c.message.edit_reply_markup(reply_markup=kb_etat(lang, sel))
-    await c.answer()
+    except Exception as e:
+        logger.warning(f"on_etat error: {e}")
 
 
 @router.callback_query(SetupStates.umowa, F.data.startswith("u_"))
 async def on_umowa(c: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    lang = data.get("lang", "ru")
-    uv = c.data[2:]
-    city = data.get("city", "all")
-    cd = data.get("city_display", "Вся Польша")
-    sel = data.get("etat", {"full": True, "part": False})
+    try:
+        data = await state.get_data()
+        lang = data.get("lang", "ru")
+        uv = c.data[2:]
+        city = data.get("city", "all")
+        cd = data.get("city_display", "Вся Польша")
+        sel = data.get("etat", {"full": True, "part": False})
 
-    ep = []
-    if sel.get("full"): ep.append("Pełny etat")
-    if sel.get("part"): ep.append("Niepełny etat")
-    ed = ", ".join(ep) if ep else "Pełny etat"
-    ud = next((n for n, v in UMOWY if v == uv), uv)
+        ep = []
+        if sel.get("full"): ep.append("Pełny etat")
+        if sel.get("part"): ep.append("Niepełny etat")
+        ed = ", ".join(ep) if ep else "Pełny etat"
+        ud = next((n for n, v in UMOWY if v == uv), uv)
 
-    db_upsert_filter(c.from_user.id, city, sel.get("full", True), sel.get("part", False), uv)
-    await state.clear()
-    uf = {"umowa": uv, "etat_full": sel.get("full", True), "etat_part": sel.get("part", False)}
+        await asyncio.to_thread(db_upsert_filter, c.from_user.id, city, sel.get("full", True), sel.get("part", False), uv)
+        await state.clear()
+        uf = {"umowa": uv, "etat_full": sel.get("full", True), "etat_part": sel.get("part", False)}
 
-    await c.message.edit_text(t(lang, "saved", city=cd, etat=ed, umowa=ud))
-    await c.answer()
+        await c.message.edit_text(t(lang, "saved", city=cd, etat=ed, umowa=ud))
+        await c.answer()
 
-    await bot.send_message(c.from_user.id, t(lang, "menu_active"), reply_markup=kb_active_menu())
-    await send_promo(c.from_user.id)
-    await asyncio.sleep(1)
+        await bot.send_message(c.from_user.id, t(lang, "menu_active"), reply_markup=kb_active_menu())
+        await send_promo(c.from_user.id)
+        await asyncio.sleep(1)
 
-    jobs = db_get_jobs_for_city(city, limit=150, hours=24)
+        jobs = await asyncio.to_thread(db_get_jobs_for_city, city, 150, 24)
 
-    if not jobs and city != "all":
-        await bot.send_message(c.from_user.id, t(lang, "loading_city"))
-        ok = await trigger_scraper_for_city(city)
-        if ok:
-            jobs = await wait_for_city_jobs(city)
+        if not jobs and city != "all":
+            await bot.send_message(c.from_user.id, t(lang, "loading_city"))
+            ok = await trigger_scraper_for_city(city)
+            if ok:
+                jobs = await wait_for_city_jobs(city)
 
-    await send_jobs_to_user(c.from_user.id, jobs, user_filter=uf, limit=8, is_initial=True)
+        await send_jobs_to_user(c.from_user.id, jobs, user_filter=uf, limit=8, is_initial=True)
+    except Exception as e:
+        logger.warning(f"on_umowa error: {e}")
 
 
 @router.callback_query(F.data == "renew_search")
 async def on_renew_search(c: CallbackQuery):
-    tid = c.from_user.id
-    lang = get_user_lang(tid)
-    ok = db_renew_search_filter(tid)
-    if ok:
-        await c.message.edit_text(t(lang, "search_renewed"), parse_mode="HTML")
-    else:
-        await c.answer("Error. Try again.", show_alert=True)
-    await c.answer()
+    try:
+        tid = c.from_user.id
+        lang = await asyncio.to_thread(get_user_lang, tid)
+        ok = await asyncio.to_thread(db_renew_search_filter, tid)
+        if ok:
+            await c.message.edit_text(t(lang, "search_renewed"), parse_mode="HTML")
+        else:
+            await c.answer("Error. Try again.", show_alert=True)
+        await c.answer()
+    except Exception as e:
+        logger.warning(f"on_renew_search error: {e}")
 
 
-# ==================== SCHEDULER ====================
+# ==================== SCHEDULER (НЕБЛОКИРУЮЩИЙ) ====================
 
 async def scheduled_check():
     if is_night_time():
@@ -1012,7 +1058,7 @@ async def scheduled_check():
         return
 
     logger.info("⏰ Check started")
-    filters = db_get_active_filters()
+    filters = await asyncio.to_thread(db_get_active_filters)
     if not filters:
         logger.info("No active filters found.")
         return
@@ -1022,19 +1068,19 @@ async def scheduled_check():
 
     for f in filters:
         tid = f["telegram_id"]
-        lang = get_user_lang(tid)
 
         last_renewal_str = f.get("last_renewal")
         if last_renewal_str:
             try:
                 last_renewal = datetime.fromisoformat(last_renewal_str.replace("Z", "+00:00"))
-                if (now - last_renewal).total_seconds() > 259200:
-                    db_pause_search_filter(tid)
+                if (now - last_renewal).total_seconds() > 259200:  # 3 дня
+                    await asyncio.to_thread(db_pause_search_filter, tid)
+                    lang = await asyncio.to_thread(get_user_lang, tid)
                     try:
                         await bot.send_message(tid, t(lang, "search_paused"), parse_mode="HTML", reply_markup=kb_renew_search(lang))
                         logger.info(f"⏸ Paused user {tid} due to 3-day inactivity.")
-                    except Exception as e:
-                        logger.error(f"Failed to send pause notification to {tid}: {e}")
+                    except Exception:
+                        await asyncio.to_thread(db_set_user_active, tid, False)
                     continue
             except Exception as e:
                 logger.error(f"Error parsing last_renewal for {tid}: {e}")
@@ -1047,10 +1093,8 @@ async def scheduled_check():
     cities = list(set(f.get("city", "all") for f in active_filters))
     city_jobs = {}
     for city in cities:
-        # УСТРАНЕНО УЗКОЕ МЕСТО: Бот теперь сканирует базу за 24 часа (hours=24).
-        # Ни одна вакансия больше не потеряется при любых задержках GitHub Actions!
-        city_jobs[city] = db_get_jobs_for_city(city, limit=100, hours=24)
-        await asyncio.sleep(0.5)
+        city_jobs[city] = await asyncio.to_thread(db_get_jobs_for_city, city, 100, 24)
+        await asyncio.sleep(0.05)
 
     for f in active_filters:
         tid = f["telegram_id"]
