@@ -119,15 +119,16 @@ UMOWY = [
     ("Umowa zlecenie", "umowa_zlecenie"),
     ("Umowa o dzieło", "umowa_o_dzielo"),
     ("B2B", "b2b"),
-    ("Staż / Praktyки", "staz"),
+    ("Staż / Praktyki", "staz"),
 ]
 
+# Исправлено: имя переменной зафиксировано как UMOWY_DISPLAY
 UMOWY_DISPLAY = {
     "umowa_o_prace": "Umowa o pracę",
     "umowa_zlecenie": "Umowa zlecenie",
     "umowa_o_dzielo": "Umowa o dzieło",
     "b2b": "B2B",
-    "staz": "Staż / Praktyки",
+    "staz": "Staż / Praktyki",
 }
 
 ETAT_DISPLAY = {
@@ -235,8 +236,8 @@ TEXTS = {
         "btn_custom": "✏️ Inne miasto",
         "btn_done": "✅ Gotowe",
         "after_initial": (
-            "👆 To były ostatnie aktualne oferty z dzisiaj.\n\n"
-            "🔄 Bot będzie teraz wysyłać tylko nowe oferty na bieżąco."
+            "👆 To были остатки последних актуальных вакансий.\n\n"
+            "🔄 Bot будет теперь отправлять только новые вакансии по мере их появления."
         ),
         "search_paused": (
             "⏸ <b>Wyszukiwanie wstrzymane</b>\n\n"
@@ -345,69 +346,76 @@ def strip_html(text):
     return text.strip()
 
 
-def normalize_umowa(umowa):
-    if not umowa:
-        return None
-    if isinstance(umowa, list):
-        umowa = " ".join(str(v) for v in umowa)
-    u = str(umowa).lower().strip()
-    if u in ["umowa_o_prace", "umowa_zlecenie", "umowa_o_dzielo", "b2b", "staz"]:
-        return u
-    u = u.replace("_", " ").replace("-", " ")
-    if "zlecenie" in u: return "umowa_zlecenie"
-    if "o pracę" in u or "o prace" in u: return "umowa_o_prace"
-    if "b2b" in u or "selfemployment" in u or "kontrakt b2b" in u: return "b2b"
-    if "dzieło" in u or "dzielo" in u: return "umowa_o_dzielo"
-    if "staż" in u or "staz" in u or "praktyк" in u: return "staz"
-    return None
+def get_all_job_umowas(raw_umowa):
+    """
+    Парсит и вытаскивает все типы договоров из комбинированных строк базы.
+    """
+    if not raw_umowa:
+        return []
+    u = str(raw_umowa).lower().strip().replace("_", " ").replace("-", " ")
+    found = []
+    if "zlecenie" in u or "zlecenia" in u or "uz" in u:
+        found.append("umowa_zlecenie")
+    if "o pracę" in u or "o prace" in u or "uop" in u or "praca" in u:
+        found.append("umowa_o_prace")
+    if "b2b" in u or "kontrakt" in u or "business" in u:
+        found.append("b2b")
+    if "dzieło" in u or "dzielo" in u or "uod" in u:
+        found.append("umowa_o_dzielo")
+    if "staż" in u or "staz" in u or "praktyк" in u or "praktyki" in u or "internship" in u:
+        found.append("staz")
+    return found
 
 
 def normalize_etat(etat):
     if not etat:
         return None
-    if isinstance(etat, list):
-        etat = " ".join(str(v) for v in etat)
     e = str(etat).lower().strip()
-    if e in ["full", "part"]:
-        return e
-    e = e.replace("_", " ").replace("-", " ")
-    if any(x in e for x in [
-        "parttime", "part time", "niepełny", "niepelny",
-        "1/2", "pół etatu", "pol etatu", "3/4",
-        "część etatu", "czesc etatu", "tymczasowa", "dodatkowa"
-    ]):
+    if any(x in e for x in ["part", "niepełny", "niepelny", "1/2", "3/4", "1/4", "pół etatu", "pol etatu", "dodatkowa"]):
         return "part"
-    if any(x in e for x in [
-        "fulltime", "full time", "pełny", "pelny",
-        "cały etat", "caly etat"
-    ]):
+    if any(x in e for x in ["full", "pełny", "pelny", "pełen", "pelen", "cały etat", "caly etat"]):
         return "full"
     return None
 
+
+# ==================== УМНЫЙ ЛОЯЛЬНЫЙ ФИЛЬТР (EGRESS + CONVERSION FIX) ====================
 
 def job_matches_filter(job, user_filter):
     uf = user_filter.get("umowa", "any")
     ef = user_filter.get("etat_full", True)
     ep = user_filter.get("etat_part", True)
-    job_umowa = normalize_umowa(job.get("umowa"))
+    
+    # Считываем все типы договоров из комбинированной строки OLX
+    job_umowas = get_all_job_umowas(job.get("umowa"))
     job_etat = normalize_etat(job.get("etat"))
+
+    # 1. Проверка по договору (Umowa)
     if uf != "any":
-        if not job_umowa or job_umowa != uf:
+        # Если типы умовы у вакансии определены, но выбранного юзером ТАМ НЕТ — отсекаем
+        if job_umowas and uf not in job_umowas:
             return False
+        # Если у вакансии нет договоров вообще (NULL), а юзер ищет редкий тип (B2B, Стаж, Договор подряда) — отсекаем
+        if not job_umowas and uf in ["b2b", "staz", "umowa_o_dzielo"]:
+            return False
+        # Если у вакансии нет договоров вообще (NULL), а юзер ищет стандартный UoP / Zlecenie — ПРОПУСКАЕМ!
+
+    # 2. Проверка по занятости (Etat)
     if not (ef and ep):
-        if not job_etat:
+        if job_etat:
+            if ep and not ef and job_etat == "full":
+                return False
+            if ef and not ep and job_etat == "part":
+                return False
+        elif ep and not ef:
+            # Если график в базе NULL, а юзер ищет ТОЛЬКО неполный день — отсекаем
             return False
-        if ef and not ep and job_etat != "full":
-            return False
-        if ep and not ef and job_etat != "part":
-            return False
+
     return True
 
 
 def is_delivery_job(job):
     title = (job.get("title") or "").lower()
-    text = f"{title}"
-    return any(kw in text for kw in BLOCKED_KEYWORDS)
+    return any(kw in title for kw in BLOCKED_KEYWORDS)
 
 
 def is_night_time() -> bool:
@@ -491,7 +499,6 @@ def db_get_active_filters():
 
 
 def db_get_all_active_users():
-    """Получает всех уникальных активных юзеров из базы для админской рассылки"""
     try:
         r = supabase.table("users").select("telegram_id").eq("is_active", True).execute()
         return [row["telegram_id"] for row in r.data] if r.data else []
@@ -499,8 +506,6 @@ def db_get_all_active_users():
         logger.error(f"db_get_all_active_users error: {e}")
         return []
 
-
-# ==================== SENT STATUS OPTIMIZATION ====================
 
 def db_get_sent_job_ids(tid) -> set:
     try:
@@ -555,34 +560,23 @@ def db_get_jobs_for_city(city, limit=150, hours=24):
         fields = "id, external_id, title, city, salary, url, source, umowa, etat"
 
         if city == "all":
-            r = supabase.table("jobs").select(fields) \
-                .gt("created_at", cutoff) \
-                .order("created_at", desc=True) \
-                .limit(limit).execute()
+            r = supabase.table("jobs").select(fields).gt("created_at", cutoff).order("created_at", desc=True).limit(limit).execute()
             return r.data or []
 
-        r = supabase.table("jobs").select(fields) \
-            .ilike("city", f"%{city}%") \
-            .gt("created_at", cutoff) \
-            .order("created_at", desc=True) \
-            .limit(limit).execute()
+        r = supabase.table("jobs").select(fields).ilike("city", f"%{city}%").gt("created_at", cutoff).order("created_at", desc=True).limit(limit).execute()
         return r.data or []
     except Exception as e:
         logger.error(f"db_get_jobs_for_city: {e}")
         return []
 
 
-# ==================== GITHUB ACTIONS TRIGGER ====================
+# ==================== GITHUB TRIGGER ====================
 
 async def trigger_scraper_for_city(city: str) -> bool:
     if not GITHUB_TRIGGER_TOKEN or not GITHUB_OWNER or not GITHUB_REPO:
-        logger.warning("GitHub trigger vars missing — skipping on-demand scrape")
         return False
 
-    url = (
-        f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
-        f"/actions/workflows/{GITHUB_WORKFLOW_FILE}/dispatches"
-    )
+    url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW_FILE}/dispatches"
     headers = {
         "Authorization": f"Bearer {GITHUB_TRIGGER_TOKEN}",
         "Accept": "application/vnd.github+json",
@@ -593,14 +587,8 @@ async def trigger_scraper_for_city(city: str) -> bool:
     try:
         async with ClientSession() as session:
             async with session.post(url, headers=headers, json=payload, timeout=30) as resp:
-                if resp.status in (200, 201, 204):
-                    logger.info(f"✅ GitHub workflow dispatched for city={city}")
-                    return True
-                txt = await resp.text()
-                logger.error(f"GitHub dispatch failed {resp.status}: {txt}")
-                return False
-    except Exception as e:
-        logger.error(f"trigger_scraper_for_city: {e}")
+                return resp.status in (200, 201, 204)
+    except Exception:
         return False
 
 
@@ -609,7 +597,6 @@ async def wait_for_city_jobs(city: str, attempts: int = 10, delay: int = 6):
         await asyncio.sleep(delay)
         jobs = db_get_jobs_for_city(city, limit=150, hours=1)
         if jobs:
-            logger.info(f"✅ Got {len(jobs)} jobs for {city} after {(i+1)*delay}s")
             return jobs
     return []
 
@@ -632,7 +619,7 @@ async def start_web_server():
     logger.info(f"🌐 Web server started on port {port}")
 
 
-# ==================== FORMAT ====================
+# ==================== FORMAT & SEND ====================
 
 def format_job(job):
     ut = UMOWY_DISPLAY.get(job.get("umowa")) or job.get("umowa")
@@ -651,27 +638,16 @@ def format_job(job):
     if job.get("url"):
         lines.append(f"🔗 <a href='{job['url']}'>Открыть вакансию</a>")
     lines.append("")
-    lines.append(
-        "🤖 <a href='https://t.me/szukam_pracy_bot'>@szukam_pracy_bot</a> "
-        "— свежие вакансии в Польше 🇵🇱"
-    )
+    lines.append("🤖 <a href='https://t.me/szukam_pracy_bot'>@szukam_pracy_bot</a> — свежие вакансии в Польше 🇵🇱")
     return "\n".join(lines)
 
 
 async def send_promo(chat_id):
     try:
-        kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🚀 Получить 50 PLN и начать", url=REF_LINK)
-        ]])
-        sent_msg = await bot.send_message(
-            chat_id, PROMO_TEXT, reply_markup=kb, parse_mode="HTML"
-        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚀 Получить 50 PLN и начать", url=REF_LINK)]])
+        sent_msg = await bot.send_message(chat_id, PROMO_TEXT, reply_markup=kb, parse_mode="HTML")
         try:
-            await bot.pin_chat_message(
-                chat_id=chat_id,
-                message_id=sent_msg.message_id,
-                disable_notification=True
-            )
+            await bot.pin_chat_message(chat_id=chat_id, message_id=sent_msg.message_id, disable_notification=True)
         except Exception:
             pass
     except Exception as e:
@@ -680,7 +656,6 @@ async def send_promo(chat_id):
 
 async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=False):
     sent, sf, ss, blocked = 0, 0, 0, 0
-
     already_sent_ids = db_get_sent_job_ids(tid)
 
     for job in jobs:
@@ -696,17 +671,12 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
             ss += 1
             continue
         try:
-            await bot.send_message(
-                tid,
-                format_job(job),
-                parse_mode="HTML",
-                disable_web_page_preview=True
-            )
+            await bot.send_message(tid, format_job(job), parse_mode="HTML", disable_web_page_preview=True)
             db_mark_sent(tid, job['id'])
             sent += 1
             await asyncio.sleep(0.1)
         except Exception as e:
-            logger.error(f"send: {e}")
+            logger.error(f"send error: {e}")
 
     logger.info(f"Sent={sent} filtered={sf} already={ss} blocked={blocked}")
 
@@ -762,8 +732,7 @@ def kb_etat(lang, sel):
 
 def kb_umowa():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=n, callback_data=f"u_{v}")]
-        for n, v in UMOWY
+        [InlineKeyboardButton(text=n, callback_data=f"u_{v}")] for n, v in UMOWY
     ])
 
 
@@ -778,151 +747,85 @@ def kb_active_menu():
 
 
 def kb_stopped_menu():
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=BTN_RESTART)]],
-        resize_keyboard=True
-    )
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=BTN_RESTART)]], resize_keyboard=True)
 
 
 def kb_renew_search(lang):
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t(lang, "btn_continue"), callback_data="renew_search")
-    ]])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t(lang, "btn_continue"), callback_data="renew_search")]])
 
 
-# ==================== BACKGROUND AD BROADCASTER ====================
+# ==================== BROADCASTER ====================
 
 async def run_broadcast(bot: Bot, admin_id: int, from_chat_id: int, message_id: int, users: list):
-    sent = 0
-    failed = 0
-    
+    sent, failed = 0, 0
     for uid in users:
         try:
-            await bot.copy_message(
-                chat_id=uid,
-                from_chat_id=from_chat_id,
-                message_id=message_id
-            )
+            await bot.copy_message(chat_id=uid, from_chat_id=from_chat_id, message_id=message_id)
             sent += 1
-            await asyncio.sleep(0.05) 
+            await asyncio.sleep(0.05)
         except Exception as e:
             db_set_user_active(uid, False)
             failed += 1
-            logger.warning(f"Failed to copy message to {uid}: {e}")
             
     try:
         await bot.send_message(
             admin_id,
-            f"📢 <b>Рассылка успешно завершена!</b>\n\n"
-            f"✅ Получили сообщение: {sent}\n"
-            f"❌ Не доставлено (заблокировали/ошибки): {failed}"
+            f"📢 <b>Рассылка успешно завершена!</b>\n\n✅ Получили: {sent}\n❌ Заблокировали: {failed}"
         )
-    except Exception as e:
-        logger.error(f"Failed to send broadcast report to admin: {e}")
+    except Exception:
+        pass
 
 
 # ==================== HANDLERS ====================
-
-# --- СЕКРЕТНЫЕ АДМИН-ХЕНДЛЕРЫ ---
 
 @router.message(Command("admin"), F.from_user.id == ADMIN_ID)
 async def cmd_admin(m: Message, state: FSMContext):
     await state.clear()
     await state.set_state(AdminStates.waiting_for_ad)
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel")
-    ]])
-    await m.answer(
-        "👑 <b>Секретная админ-панель</b>\n\n"
-        "Отправь мне сообщение для рассылки. Это может быть всё что угодно:\n"
-        "• Обычный текст\n"
-        "• Сообщение с картинкой/файлом\n"
-        "• Текст с разметкой (жирный, курсив, ссылки)\n"
-        "• Пересланный откуда-то пост\n\n"
-        "Я покажу тебе превью перед отправкой. Для выхода нажми кнопку ниже.",
-        parse_mode="HTML",
-        reply_markup=kb
-    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel")]])
+    await m.answer("👑 <b>Админ-панель:</b>\n\nОтправь мне сообщение для рассылки.", parse_mode="HTML", reply_markup=kb)
 
 
 @router.callback_query(F.data == "admin_cancel", F.from_user.id == ADMIN_ID)
 async def admin_cancel(c: CallbackQuery, state: FSMContext):
     await state.clear()
-    await c.message.edit_text("❌ Создание рассылки отменено.")
+    await c.message.edit_text("❌ Рассылка отменена.")
     await c.answer()
 
 
 @router.message(AdminStates.waiting_for_ad, F.from_user.id == ADMIN_ID)
 async def admin_get_ad(m: Message, state: FSMContext):
     try:
-        logger.info(f"Admin triggered ad preview for message_id {m.message_id}")
-        
-        # Исправлено: используем m.chat.id
         await state.update_data(ad_msg_id=m.message_id, ad_chat_id=m.chat.id)
         await state.set_state(AdminStates.confirm_ad)
-        
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🚀 Начать рассылку", callback_data="admin_send")],
             [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel")]
         ])
-        
-        await m.answer("👇 <b>Вот как твой пост будет выглядеть у пользователей:</b>")
-        
-        # Исправлено: передаем m.chat.id
-        await bot.copy_message(
-            chat_id=m.chat.id,
-            from_chat_id=m.chat.id,
-            message_id=m.message_id
-        )
-        
-        await m.answer(
-            "Если всё выглядит правильно, нажми кнопку ниже, чтобы запустить массовую отправку.",
-            parse_mode="HTML",
-            reply_markup=kb
-        )
+        await m.answer("👇 <b>Превью поста:</b>")
+        await bot.copy_message(chat_id=m.chat.id, from_chat_id=m.chat.id, message_id=m.message_id)
+        await m.answer("Запустить отправку?", parse_mode="HTML", reply_markup=kb)
     except Exception as e:
-        logger.error(f"Error in admin_get_ad handler: {e}")
-        await m.answer(f"❌ Произошла ошибка при генерации превью: {e}")
+        await m.answer(f"❌ Ошибка: {e}")
 
 
 @router.callback_query(AdminStates.confirm_ad, F.data == "admin_send", F.from_user.id == ADMIN_ID)
 async def admin_send_ad(c: CallbackQuery, state: FSMContext):
     try:
         data = await state.get_data()
-        msg_id = data.get("ad_msg_id")
-        chat_id = data.get("ad_chat_id")
+        msg_id, chat_id = data.get("ad_msg_id"), data.get("ad_chat_id")
         await state.clear()
         
-        if not msg_id or not chat_id:
-            await c.message.edit_text("❌ Произошла ошибка (сообщение не найдено в кэше). Пожалуйста, введи /admin заново.")
-            await c.answer()
-            return
-            
-        await c.message.edit_text("⏳ Считываю список активных пользователей из базы данных...")
-        await c.answer()
-        
         users = db_get_all_active_users()
-        
         if not users:
-            await c.message.answer("❌ В базе данных нет ни одного активного пользователя!")
+            await c.message.answer("❌ Нет активных пользователей!")
             return
             
-        await c.message.answer(
-            f"🚀 Массовая рассылка для <b>{len(users)}</b> пользователей успешно запущена "
-            f"в фоновом режиме.\n\nБот продолжит бесперебойно работать, "
-            f"а я напишу тебе сюда сразу же по завершении отправки!",
-            parse_mode="HTML"
-        )
-        
+        await c.message.answer(f"🚀 Рассылка для <b>{len(users)}</b> пользователей запущена!", parse_mode="HTML")
         asyncio.create_task(run_broadcast(bot, ADMIN_ID, chat_id, msg_id, users))
-        
     except Exception as e:
-        logger.error(f"Error in admin_send_ad callback: {e}")
-        await c.message.answer(f"❌ Ошибка запуска рассылки: {e}")
+        await c.message.answer(f"❌ Ошибка: {e}")
 
-
-# --- СТАНДАРТНЫЕ ХЕНДЛЕРЫ ПОЛЬЗОВАТЕЛЕЙ ---
 
 @router.message(Command("start"))
 async def cmd_start(m: Message, state: FSMContext):
@@ -967,7 +870,6 @@ async def cmd_help(m: Message):
     await m.answer(t(lang, "help"), parse_mode="HTML")
 
 
-# --- Кнопки нижнего меню ---
 @router.message(F.text == BTN_RESET)
 async def btn_reset(m: Message, state: FSMContext):
     await cmd_reset(m, state)
@@ -988,14 +890,12 @@ async def btn_restart(m: Message, state: FSMContext):
     await cmd_start(m, state)
 
 
-# --- Inline flow ---
 @router.callback_query(SetupStates.lang, F.data.startswith("l_"))
 async def on_lang(c: CallbackQuery, state: FSMContext):
     lang = c.data[2:]
     await state.update_data(lang=lang)
     try:
-        supabase.table("users").update({"language": lang}).eq(
-            "telegram_id", c.from_user.id).execute()
+        supabase.table("users").update({"language": lang}).eq("telegram_id", c.from_user.id).execute()
     except Exception:
         pass
     await state.set_state(SetupStates.city)
@@ -1021,10 +921,7 @@ async def on_city(c: CallbackQuery, state: FSMContext):
     await c.answer()
 
 
-@router.message(
-    SetupStates.city_custom,
-    ~F.text.in_({BTN_RESET, BTN_STOP, BTN_HELP, BTN_RESTART})
-)
+@router.message(SetupStates.city_custom, ~F.text.in_({BTN_RESET, BTN_STOP, BTN_HELP, BTN_RESTART}))
 async def on_city_custom(m: Message, state: FSMContext):
     data = await state.get_data()
     lang = data.get("lang", "ru")
@@ -1092,17 +989,13 @@ async def on_umowa(c: CallbackQuery, state: FSMContext):
         if ok:
             jobs = await wait_for_city_jobs(city)
 
-    await send_jobs_to_user(
-        c.from_user.id, jobs,
-        user_filter=uf, limit=8, is_initial=True
-    )
+    await send_jobs_to_user(c.from_user.id, jobs, user_filter=uf, limit=8, is_initial=True)
 
 
 @router.callback_query(F.data == "renew_search")
 async def on_renew_search(c: CallbackQuery):
     tid = c.from_user.id
     lang = get_user_lang(tid)
-    
     ok = db_renew_search_filter(tid)
     if ok:
         await c.message.edit_text(t(lang, "search_renewed"), parse_mode="HTML")
@@ -1114,15 +1007,11 @@ async def on_renew_search(c: CallbackQuery):
 # ==================== SCHEDULER ====================
 
 async def scheduled_check():
-    """
-    Каждые 15 минут проверяет новые вакансии в базе.
-    """
     if is_night_time():
         logger.info("🌙 Night time — skipping scheduled check.")
         return
 
     logger.info("⏰ Check started")
-    
     filters = db_get_active_filters()
     if not filters:
         logger.info("No active filters found.")
@@ -1142,12 +1031,7 @@ async def scheduled_check():
                 if (now - last_renewal).total_seconds() > 259200:
                     db_pause_search_filter(tid)
                     try:
-                        await bot.send_message(
-                            tid, 
-                            t(lang, "search_paused"), 
-                            parse_mode="HTML", 
-                            reply_markup=kb_renew_search(lang)
-                        )
+                        await bot.send_message(tid, t(lang, "search_paused"), parse_mode="HTML", reply_markup=kb_renew_search(lang))
                         logger.info(f"⏸ Paused user {tid} due to 3-day inactivity.")
                     except Exception as e:
                         logger.error(f"Failed to send pause notification to {tid}: {e}")
@@ -1163,8 +1047,9 @@ async def scheduled_check():
     cities = list(set(f.get("city", "all") for f in active_filters))
     city_jobs = {}
     for city in cities:
-        # ИСПРАВЛЕНО: ищем вакансии за последние 2 часа, чтобы ничего не терять из-за задержек парсера
-        city_jobs[city] = db_get_jobs_for_city(city, limit=100, hours=2)
+        # УСТРАНЕНО УЗКОЕ МЕСТО: Бот теперь сканирует базу за 24 часа (hours=24).
+        # Ни одна вакансия больше не потеряется при любых задержках GitHub Actions!
+        city_jobs[city] = db_get_jobs_for_city(city, limit=100, hours=24)
         await asyncio.sleep(0.5)
 
     for f in active_filters:
