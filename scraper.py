@@ -6,6 +6,7 @@ import logging
 import json
 import re
 import argparse
+import random
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -278,70 +279,7 @@ def get_active_cities_from_db() -> list:
         return []
 
 
-# ==================== OLX (JSON + HTML FALLBACK) ====================
-
-def extract_all_text_from_node(obj):
-    texts = []
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            if k in ["label", "name", "value", "key", "title"] and isinstance(v, str):
-                texts.append(v)
-            else:
-                texts.extend(extract_all_text_from_node(v))
-    elif isinstance(obj, list):
-        for item in obj:
-            texts.extend(extract_all_text_from_node(item))
-    elif isinstance(obj, str):
-        texts.append(obj)
-    return texts
-
-
-def extract_olx_params_json(item: dict, title: str, salary: str):
-    umowa_texts = []
-    etat_texts = []
-    params = item.get("params", [])
-    
-    for p in params:
-        if not isinstance(p, dict):
-            continue
-        key = str(p.get("key") or "").lower()
-        name = str(p.get("name") or "").lower()
-        
-        node_texts = extract_all_text_from_node(p)
-        joined_text = " ".join(node_texts)
-        
-        if "contract" in key or "umow" in key or "umow" in name:
-            umowa_texts.append(joined_text)
-        if "hours" in key or "wymiar" in key or "etat" in name or "time" in key:
-            etat_texts.append(joined_text)
-
-    umowa_key = normalize_umowa(" ".join(umowa_texts))
-    etat_key = normalize_etat(" ".join(etat_texts), salary)
-
-    if not umowa_key:
-        umowa_key = normalize_umowa(title)
-    if not etat_key:
-        etat_key = normalize_etat(title, salary)
-            
-    return umowa_key, etat_key
-
-
-def extract_olx_params_from_html(card_soup, title, salary):
-    """Вытягивает etat и umowa напрямую из HTML карточки OLX"""
-    param_nodes = card_soup.find_all(["p", "span", "div"], class_=re.compile(r"css-"))
-    found_texts = [p.get_text(strip=True) for p in param_nodes if p.get_text(strip=True)]
-    combined_text = " ".join(found_texts)
-
-    umowa_key = normalize_umowa(combined_text)
-    etat_key = normalize_etat(combined_text, salary)
-
-    if not umowa_key:
-        umowa_key = normalize_umowa(title)
-    if not etat_key:
-        etat_key = normalize_etat(title, salary)
-
-    return umowa_key, etat_key
-
+# ==================== OLX (ОБНОВЛЕННЫЙ ПАРСЕР ПО HTML КАРТОЧКАМ) ====================
 
 async def parse_olx(city: str, existing_ids: set):
     saved = 0
@@ -357,95 +295,46 @@ async def parse_olx(city: str, existing_ids: set):
 
         soup = BeautifulSoup(html, "html.parser")
         
-        # Собираем словарь карточек из HTML по ID для фолбека
-        html_cards = {}
-        for card in soup.select("div[data-cy='l-card']"):
-            card_id = card.get("id")
-            if card_id:
-                html_cards[str(card_id)] = card
-
-        # Парсим JSON-состояние страницы
-        data = None
-        m = re.search(r'window\.__PRERENDERED_STATE__\s*=\s*"(.*?)";\s*(?:window|</script>)', html, re.DOTALL)
-        if m:
-            raw = m.group(1).replace('\\"', '"').replace('\\\\', '\\')
-            try:
-                data = json.loads(raw)
-            except Exception:
-                try:
-                    data = json.loads(m.group(1).encode().decode("unicode_escape"))
-                except Exception:
-                    pass
-
-        if not data:
-            logger.warning(f"OLX __PRERENDERED_STATE__ not found for {city}")
+        cards = soup.find_all("div", attrs={"data-cy": "l-card"})
+        if not cards:
+            logger.warning(f"OLX cards not found for {city}")
             return saved
 
-        listing = data.get("listing", {}).get("listing", data.get("listing", {}))
-        ads = listing.get("ads", [])
-        if not ads:
-            for k in ["adverts", "data", "items"]:
-                v = listing.get(k)
-                if v and isinstance(v, list):
-                    ads = v
-                    break
-
-        for item in ads[:40]:
+        for card in cards[:40]:
             try:
-                title = strip_html(item.get("title") or "")
-                if not title:
+                title_tag = card.find("h4")
+                if not title_tag:
                     continue
+                title = strip_html(title_tag.get_text(strip=True))
 
-                link = item.get("url") or ""
-                if not link:
-                    sid, iid = item.get("slug", ""), item.get("id", "")
-                    if sid and iid:
-                        link = f"https://www.olx.pl/oferta/{sid}-ID{iid}.html"
-                if not link or not link.startswith("http"):
-                    if link and not link.startswith("http"):
-                        link = "https://www.olx.pl" + link
-                    else:
-                        continue
+                link_tag = card.find("a", href=True)
+                if not link_tag:
+                    continue
+                link = link_tag["href"]
+                if not link.startswith("http"):
+                    link = "https://www.olx.pl" + link
 
                 ext_id = hashlib.md5(f"olx_{link}".encode()).hexdigest()
                 if ext_id in existing_ids:
                     continue
 
+                card_text = card.get_text(" ", strip=True)
+
                 salary = None
-                sal = item.get("salary")
-                if sal:
-                    salary = sal.get("displayValue") if isinstance(sal, dict) else str(sal)
-                if not salary:
-                    price = item.get("price", {})
-                    if isinstance(price, dict):
-                        salary = price.get("displayValue")
+                for p in card.find_all("p"):
+                    p_text = p.get_text(strip=True)
+                    if "zł" in p_text.lower() or "pln" in p_text.lower():
+                        salary = strip_html(p_text)
+                        break
 
-                location = item.get("location", {})
-                job_city = ""
-                if isinstance(location, dict):
-                    cd = location.get("city", {})
-                    job_city = cd.get("name", "") if isinstance(cd, dict) else (cd if isinstance(cd, str) else location.get("cityName", ""))
-
-                if city and job_city and not city_matches(job_city, city):
-                    continue
-
-                # 1. Сначала пробуемJSON
-                umowa_key, etat_key = extract_olx_params_json(item, title, salary)
-
-                # 2. Если JSON дал NULL/None — берем HTML-карточку
-                item_id = str(item.get("id") or "")
-                if (not umowa_key or not etat_key) and item_id in html_cards:
-                    html_umowa, html_etat = extract_olx_params_from_html(html_cards[item_id], title, salary)
-                    if not umowa_key:
-                        umowa_key = html_umowa
-                    if not etat_key:
-                        etat_key = html_etat
+                umowa_key = normalize_umowa(card_text) or normalize_umowa(title)
+                etat_key = normalize_etat(card_text, salary) or normalize_etat(title, salary)
 
                 job_id = db_insert_job(
                     ext_id,
                     title,
-                    strip_html(job_city or city),
-                    strip_html(salary) if salary else None,
+                    city, 
+                    salary,
                     link,
                     "OLX",
                     umowa=umowa_key,
@@ -455,9 +344,9 @@ async def parse_olx(city: str, existing_ids: set):
                     saved += 1
                     existing_ids.add(ext_id)
             except Exception as e:
-                logger.error(f"OLX JSON item error: {e}")
+                logger.error(f"OLX HTML item error: {e}")
 
-        logger.info(f"OLX JSON saved={saved} city={city}")
+        logger.info(f"OLX HTML saved={saved} city={city}")
     except Exception as e:
         logger.error(f"parse_olx({city}) general error: {e}")
 
