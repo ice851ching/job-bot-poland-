@@ -43,7 +43,7 @@ CITY_SLUGS = {
     "szczecin": "szczecin", "bydgoszcz": "bydgoszcz",
     "białystok": "bialystok", "bialystok": "bialystok",
     "gdynia": "gdynia",
-    "częstochowa": "czestochowa", "częstochowa": "czestochowa",
+    "częstochowa": "czestochowa",
     "sosnowiec": "sosnowiec",
     "rzeszów": "rzeszow", "rzeszow": "rzeszow",
     "kielce": "kielce", "gliwice": "gliwice",
@@ -95,7 +95,7 @@ def strip_html(text):
 def normalize_umowa(text):
     if not text:
         return None
-    if isinstance(text, list):
+    if isinstance(text, (list, tuple, set)):
         text = " ".join(str(v) for v in text)
     t = str(text).lower().strip().replace("_", " ").replace("-", " ")
     
@@ -131,6 +131,8 @@ def normalize_umowa(text):
 def normalize_etat(text, salary_text=None):
     if not text:
         text = ""
+    if isinstance(text, (list, tuple, set)):
+        text = " ".join(str(v) for v in text)
     t = str(text).lower().strip()
 
     # Неполный день / Part-time
@@ -279,23 +281,47 @@ def get_active_cities_from_db() -> list:
 
 # ==================== OLX (УЛЬТРА-СОВРЕМЕННЫЙ ПАРСЕР КАРТОЧЕК) ====================
 
+def extract_all_text_from_node(obj):
+    """Рекурсивный сбор абсолютно всех текстовых значений из вложенных JSON-узлов"""
+    texts = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in ["label", "name", "value", "key", "title"] and isinstance(v, str):
+                texts.append(v)
+            else:
+                texts.extend(extract_all_text_from_node(v))
+    elif isinstance(obj, list):
+        for item in obj:
+            texts.extend(extract_all_text_from_node(item))
+    elif isinstance(obj, str):
+        texts.append(obj)
+    return texts
+
+
 def extract_olx_params_json(item: dict, title: str, salary: str):
-    """Fallback-парсинг параметров из JSON, если сломалась верстка HTML-карточек"""
-    umowa_key = None
-    etat_key = None
+    """Глубокий разбор массива params без потери сложных и составных типов контрактов"""
+    umowa_texts = []
+    etat_texts = []
     params = item.get("params", [])
+    
     for p in params:
         if not isinstance(p, dict):
             continue
         key = str(p.get("key") or "").lower()
         name = str(p.get("name") or "").lower()
-        val = p.get("value")
-        val_label = str(val.get("label") or val.get("key") or "") if isinstance(val, dict) else str(val or "")
-            
+        
+        # Рекурсивно вытягиваем весь текст из узла параметра
+        node_texts = extract_all_text_from_node(p)
+        joined_text = " ".join(node_texts)
+        
         if "contract" in key or "umow" in key or "umow" in name:
-            umowa_key = normalize_umowa(val_label)
-        if "hours" in key or "wymiar" in key or "etat" in name:
-            etat_key = normalize_etat(val_label)
+            umowa_texts.append(joined_text)
+        if "hours" in key or "wymiar" in key or "etat" in name or "time" in key:
+            etat_texts.append(joined_text)
+
+    # Запускаем нормализацию сжатых строк
+    umowa_key = normalize_umowa(" ".join(umowa_texts))
+    etat_key = normalize_etat(" ".join(etat_texts), salary)
 
     # Fallback по заголовку
     if not umowa_key:
@@ -318,90 +344,7 @@ async def parse_olx(city: str, existing_ids: set):
         if status != 200:
             return saved
 
-        soup = BeautifulSoup(html, "html.parser")
-        
-        # Находим карточки вакансий на странице
-        cards = soup.select('div.jobs-ad-card')
-        if not cards:
-            # Резервный селектор на случай изменения классов
-            cards = [link.find_parent('div') for link in soup.select('a[data-testid="card-title-link"]')]
-            cards = [c for c in cards if c is not None]
-
-        # 1. ОСНОВНОЙ ПУТЬ: ПАРСИМ КАРТОЧКИ ИЗ HTML (МГНОВЕННО, БЕЗ СУБЗАПРОСОВ)
-        if cards:
-            logger.info(f"OLX parsing HTML cards: {len(cards)} found for {city}")
-            for card in cards[:30]:
-                try:
-                    title_el = card.select_one('a[data-testid="card-title-link"]')
-                    if not title_el:
-                        continue
-                    title = strip_html(title_el.get_text())
-                    if not title:
-                        continue
-
-                    link = title_el.get('href', '').split('?')[0]
-                    if not link:
-                        continue
-                    if not link.startswith('http'):
-                        link = "https://www.olx.pl" + link
-
-                    ext_id = hashlib.md5(f"olx_{link}".encode()).hexdigest()
-                    if ext_id in existing_ids:
-                        continue
-
-                    salary = None
-                    job_city = city
-                    umowa_key = None
-                    etat_key = None
-
-                    # Читаем все текстовые блоки внутри карточки
-                    for p in card.select('p'):
-                        text = p.get_text(strip=True)
-                        if not text:
-                            continue
-                        if "zł" in text.lower() or "pln" in text.lower() or "eur" in text.lower():
-                            salary = text
-                        else:
-                            # Проверяем, не лежит ли тут умова или этат прямо в тексте карточки!
-                            u = normalize_umowa(text)
-                            if u:
-                                umowa_key = u
-                                continue
-                            e = normalize_etat(text)
-                            if e:
-                                etat_key = e
-                                continue
-                            if "odświeżono" not in text.lower() and "dzisiaj" not in text.lower() and len(text) > 2:
-                                job_city = text
-
-                    # Если ленивый работодатель не вынес умову на плашку карточки — делаем fallback по названию
-                    if not umowa_key:
-                        umowa_key = normalize_umowa(title)
-                    if not etat_key:
-                        etat_key = normalize_etat(title, salary)
-
-                    job_id = db_insert_job(
-                        ext_id,
-                        title,
-                        strip_html(job_city or city),
-                        strip_html(salary) if salary else None,
-                        link,
-                        "OLX",
-                        umowa=umowa_key,
-                        etat=etat_key,
-                    )
-                    if job_id:
-                        saved += 1
-                        existing_ids.add(ext_id)
-                except Exception as e:
-                    logger.error(f"OLX HTML card parser error: {e}")
-            
-            logger.info(f"OLX HTML parsing finished. Saved={saved} city={city}")
-            if saved > 0:
-                return saved
-
-        # 2. РЕЗЕРВНЫЙ ПУТЬ: ПАРСИМ ЧЕРЕЗ JSON (ЕСЛИ КАРТОЧКИ НЕ НАЙДЕНЫ)
-        logger.info(f"OLX HTML parsing yielded 0 saves, falling back to JSON state for {city}")
+        # Напрямую парсим JSON-состояние страницы
         data = None
         m = re.search(r'window\.__PRERENDERED_STATE__\s*=\s*"(.*?)";\s*(?:window|</script>)', html, re.DOTALL)
         if m:
@@ -415,6 +358,7 @@ async def parse_olx(city: str, existing_ids: set):
                     pass
 
         if not data:
+            logger.warning(f"OLX __PRERENDERED_STATE__ not found for {city}")
             return saved
 
         listing = data.get("listing", {}).get("listing", data.get("listing", {}))
@@ -426,7 +370,7 @@ async def parse_olx(city: str, existing_ids: set):
                     ads = v
                     break
 
-        for item in ads[:30]:
+        for item in ads[:40]:
             try:
                 title = strip_html(item.get("title") or "")
                 if not title:
