@@ -55,8 +55,8 @@ REF_LINK = "https://panel.city-drive.pl/ref/PracaBOT"
 DONATE_ACCOUNT = "84 9511 0000 0052 9681 3000 0010"
 
 PROMO_TEXT = (
-    "💼 <b>Ищешь подработку с гибким графиком in Польше?</b>\n\n"
-    "Подключайся к доставке через <b>City Drive</b> и выходи на заказы in "
+    "💼 <b>Ищешь подработку с гибким графиком в Польше?</b>\n\n"
+    "Подключайся к доставке через <b>City Drive</b> и выходи на заказы в "
     "<b>Glovo / Uber Eats / Bolt Food</b>.\n\n"
     "Что по условиям:\n"
     "• свободный график — можно совмещать с учёбой или основной работой\n"
@@ -355,9 +355,6 @@ def strip_html(text):
 
 
 def get_all_job_umowas(raw_umowa):
-    """
-    Парсит и вытаскивает все типы договоров из комбинированных строк базы.
-    """
     if not raw_umowa:
         return []
     u = str(raw_umowa).lower().strip().replace("_", " ").replace("-", " ")
@@ -393,21 +390,15 @@ def job_matches_filter(job, user_filter):
     ef = user_filter.get("etat_full", True)
     ep = user_filter.get("etat_part", True)
     
-    # Считываем все типы договоров из комбинированной строки OLX
     job_umowas = get_all_job_umowas(job.get("umowa"))
     job_etat = normalize_etat(job.get("etat"))
 
-    # 1. Проверка по договору (Umowa)
     if uf != "any":
-        # Если типы умовы у вакансии определены, но выбранного юзером ТАМ НЕТ — отсекаем
         if job_umowas and uf not in job_umowas:
             return False
-        # Если у вакансии нет договоров вообще (NULL), а юзер ищет редкий тип (B2B, Стаж, Договор подряда) — отсекаем
         if not job_umowas and uf in ["b2b", "staz", "umowa_o_dzielo"]:
             return False
-        # Если у вакансии нет договоров вообще (NULL), а юзер ищет стандартный UoP / Zlecenie — ПРОПУСКАЕМ!
 
-    # 2. Проверка по занятости (Etat)
     if not (ef and ep):
         if job_etat:
             if ep and not ef and job_etat == "full":
@@ -415,7 +406,6 @@ def job_matches_filter(job, user_filter):
             if ef and not ep and job_etat == "part":
                 return False
         elif ep and not ef:
-            # Если график в базе NULL, а юзер ищет ТОЛЬКО неполный день — отсекаем
             return False
 
     return True
@@ -427,26 +417,42 @@ def is_delivery_job(job):
 
 
 def is_invalid_olx_url(url: str) -> bool:
-    """Проверяет, является ли ссылка битой или ссылкой на профиль OLX вместо вакансии."""
+    """Проверяет, является ли ссылка битой или ссылкой на профиль/главную страницу компании OLX."""
     if not url:
         return True
     
     url_lower = url.lower()
-    
-    # Отсекаем профили пользователей/компаний OLX
-    if "olx.pl/oferty/uzytkownik/" in url_lower or "/uzytkownik/" in url_lower:
-        return True
+    if "olx.pl" in url_lower:
+        # У всех реальных вакансий OLX в ссылке обязан присутствовать блок '/oferta/'
+        if "/oferta/" not in url_lower:
+            return True
+        # Отсекаем профили пользователей
+        if "/uzytkownik/" in url_lower or "olx.pl/oferty/uzytkownik/" in url_lower:
+            return True
         
     return False
 
 
 def is_night_time() -> bool:
-    """Определяет, ночь ли в Польше (23:00 - 08:00)"""
     now_utc = datetime.now(timezone.utc)
     month = now_utc.month
     offset_hours = 2 if 3 < month < 11 else 1
     local_time = now_utc + timedelta(hours=offset_hours)
     return local_time.hour >= 23 or local_time.hour < 8
+
+
+def parse_iso_datetime(dt_str: str) -> datetime:
+    """Безопасно переводит ISO строку даты из БД во временной объект с таймзоной."""
+    if not dt_str:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    dt_str = dt_str.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(dt_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return datetime.min.replace(tzinfo=timezone.utc)
 
 
 # ==================== DATABASE ====================
@@ -539,7 +545,6 @@ def db_get_sent_job_ids(tid) -> set:
 
 
 def db_mark_sent_batch(tid, job_ids: list) -> bool:
-    """Пакетная безошибочная фиксация отправки (upsert без дублей)"""
     if not job_ids:
         return True
     try:
@@ -589,7 +594,8 @@ def db_pause_search_filter(tid):
 def db_get_jobs_for_city(city, limit=150, hours=24):
     try:
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-        fields = "id, external_id, title, city, salary, url, source, umowa, etat"
+        # Добавляем created_at для сортировки и фильтрации во времени
+        fields = "id, external_id, title, city, salary, url, source, umowa, etat, created_at"
 
         if city == "all":
             r = supabase.table("jobs").select(fields).gt("created_at", cutoff).order("created_at", desc=True).limit(limit).execute()
@@ -695,10 +701,6 @@ async def send_promo(chat_id):
 
 
 async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=False):
-    """
-    Отправляет вакансии одному пользователю с помощью индивидуальной блокировки (Lock),
-    исключая состояние гонки (Race condition) и дубликаты.
-    """
     async with get_user_lock(tid):
         sent, sf, ss, blocked = 0, 0, 0, 0
         already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, tid)
@@ -712,7 +714,7 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
             if job_id is None:
                 continue
 
-            # Отсекаем битые ссылки и ссылки на профили пользователей OLX
+            # Двойная валидация URL: отсекаем профили и мусорные поддомены
             if is_invalid_olx_url(job.get("url")):
                 continue
 
@@ -739,7 +741,6 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
                 already_sent_ids.add(job_id)
                 sent += 1
 
-                # Небольшая пауза только между сообщениями одного пользователя.
                 await asyncio.sleep(0.05)
 
             except TelegramRetryAfter as e:
@@ -1129,6 +1130,7 @@ async def on_umowa(c: CallbackQuery, state: FSMContext):
             if ok:
                 jobs = await wait_for_city_jobs(city)
 
+        # Первая отправка: забираем максимум 8 любых подходящих за сутки
         await send_jobs_to_user(c.from_user.id, jobs, user_filter=uf, limit=8, is_initial=True)
     except Exception as e:
         logger.warning(f"on_umowa error: {e}")
@@ -1152,9 +1154,6 @@ async def on_renew_search(c: CallbackQuery):
 # ==================== SCHEDULER (НЕБЛОКИРУЮЩИЙ) ====================
 
 async def scheduled_check():
-    """
-    Основной цикл новых вакансий.
-    """
     started = datetime.now(timezone.utc)
 
     if is_night_time():
@@ -1250,10 +1249,25 @@ async def scheduled_check():
                 logger.info(f"👤 {tid}: no fresh jobs for {city}")
                 return 0
 
+            # ==================== РЕШЕНИЕ БАГА СО СТАРЫМИ ВАКАНСИЯМИ ====================
+            # Берем дату последнего обновления настроек / подписки пользователя
+            user_renewal_time = parse_iso_datetime(f.get("last_renewal"))
+            
+            # Отсекаем ВСЁ, что было создано в базе ДО того, как пользователь запустил поиск
+            fresh_jobs = []
+            for j in jobs:
+                job_created_time = parse_iso_datetime(j.get("created_at"))
+                if job_created_time > user_renewal_time:
+                    fresh_jobs.append(j)
+
+            if not fresh_jobs:
+                logger.info(f"👤 {tid}: no NEW jobs since subscription start.")
+                return 0
+
             async with semaphore:
                 try:
                     return await send_jobs_to_user(
-                        tid, jobs, user_filter=uf, limit=15
+                        tid, fresh_jobs, user_filter=uf, limit=15
                     )
                 except asyncio.CancelledError:
                     raise
