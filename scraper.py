@@ -122,10 +122,6 @@ def city_matches(job_city, filter_city):
 # ==================== ОПТИМИЗИРОВАННЫЙ ОБХОД БАНОВ ====================
 
 def fetch_url(url: str, impersonate_target: str = "chrome120"):
-    """
-    Выполняет запрос с чистым отпечатком TLS выбранного браузера.
-    Регистр заголовков (lowercase) строго соответствует HTTP/2 стандарту.
-    """
     try:
         r = cr.get(
             url,
@@ -141,19 +137,22 @@ def fetch_url(url: str, impersonate_target: str = "chrome120"):
         return 0, ""
 
 
+TARGET_BROWSERS = ["chrome120", "chrome110", "edge101", "safari_mac_12_0"]
+
 def fetch_url_with_retry(url: str):
     """
-    Пытается скачать страницу, меняя отпечатки браузеров (Chrome -> Safari -> Edge)
-    при получении бана 403 от Cloudflare.
+    Пытается скачать страницу, поочередно меняя поддерживаемые отпечатки браузеров
+    (Chrome120 -> Chrome110 -> Edge101 -> Safari Mac) при получении 403.
     """
-    status, html = fetch_url(url, "chrome120")
-    if status == 403:
-        logger.warning(f"Got 403 with chrome120 for {url}. Retrying with safari15...")
-        status, html = fetch_url(url, "safari15")
-    if status == 403:
-        logger.warning(f"Got 403 with safari15 for {url}. Retrying with edge99...")
-        status, html = fetch_url(url, "edge99")
-    return status, html
+    for browser in TARGET_BROWSERS:
+        status, html = fetch_url(url, browser)
+        if status == 403:
+            logger.warning(f"Got 403 with {browser} for {url}. Retrying with next profile...")
+            import time
+            time.sleep(1.0)
+            continue
+        return status, html
+    return 403, ""
 
 
 # ==================== DATABASE (BATCH ОПТИМИЗАЦИЯ) ====================
@@ -372,10 +371,6 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
 
 
 async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
-    """
-    Полностью переписанный парсер GoWork под твою верстку.
-    Обходит блокировку Cloudflare и достает Договор (Umowa) и График (Etat).
-    """
     try:
         await asyncio.sleep(random.uniform(2.0, 4.5))
 
@@ -387,7 +382,6 @@ async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
             logger.warning(f"GoWork returned status {status} for {city}")
             return 0
 
-        # Детекция блокировки Cloudflare
         if "cloudflare" in html.lower() or "just a moment" in html.lower() or "noscript" in html.lower() and "enable javascript" in html.lower():
             logger.warning(f"⚠️ GoWork page for {city} is protected by Cloudflare. Parsing skipped.")
             return 0
@@ -402,7 +396,6 @@ async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
 
         for card in cards[:35]:
             try:
-                # 1. Заголовок и Ссылка (строго по твоей верстке карточки)
                 title_el = card.select_one(".g-job-item__offer-title h3 a.g-button")
                 if not title_el:
                     continue
@@ -426,7 +419,6 @@ async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
                         continue
                     existing_ids.add(ext_id)
 
-                # 2. Город
                 job_city = city
                 loc_el = card.select_one(".g-job-location")
                 if loc_el:
@@ -437,7 +429,6 @@ async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
                 if not city_matches(job_city, city):
                     continue
 
-                # 3. Достаем ВСЕ теги карточки (Umowa, Etat, Salary)
                 tag_els = card.select(".g-job-item-content__tag")
                 tags = [strip_html(t.get_text(" ", strip=True)) for t in tag_els]
 
