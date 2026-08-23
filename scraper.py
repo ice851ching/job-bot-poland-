@@ -5,6 +5,7 @@ import hashlib
 import logging
 import re
 import argparse
+import random
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
@@ -362,12 +363,16 @@ async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
     Забирает: заголовок, ссылку, город, зарплату, тип договора (в т.ч. из dropdown) и график.
     """
     try:
+        # ==================== УМНАЯ ЗАДЕРЖКА ДЛЯ ОБХОДА CLOUDFLARE ====================
+        # Добавляем случайную паузу от 1.5 до 4.2 секунд
+        await asyncio.sleep(random.uniform(1.5, 4.2))
+
         slug = get_city_slug(city)
         url = f"https://www.gowork.pl/praca/{slug};l" if slug else "https://www.gowork.pl/praca;l"
 
         status, html = await asyncio.to_thread(fetch_url, url)
         if status != 200 or not html:
-            logger.warning(f"GoWork returned status {status} for {city}")
+            logger.warning(f"GoWork returned status {status} for {city} (Possible block/Cloudflare)")
             return 0
 
         soup = BeautifulSoup(html, "html.parser")
@@ -425,7 +430,6 @@ async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
                 for t in tags:
                     t_lower = t.lower()
                     if "zł" in t_lower or "pln" in t_lower or "eur" in t_lower:
-                        # Отсекаем "kg" и прочий мусор — оставляем только строки с валютой
                         salary = t
                         break
 
