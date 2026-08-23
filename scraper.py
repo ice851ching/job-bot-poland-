@@ -102,7 +102,7 @@ def normalize_etat(text, salary_text=None):
     t = str(text).lower().strip()
     if any(x in t for x in ["parttime", "part time", "niepełny", "niepelny", "неполный", "неповний", "1/2", "3/4", "1/4", "pół etatu", "czesc etatu", "dodatkowa", "dorywcza", "student"]):
         return "part"
-    if any(x in t for x in ["fulltime", "full time", "pełny", "pelny", "pełen", "pelen", "cały etat", "полный", "повний", "1/1", "etatowa"]):
+    if any(x in t for x in ["fulltime", "full time", "pełny", "pelny", "pełеn", "pelen", "cały etat", "полный", "повний", "1/1", "etatowa"]):
         return "full"
     if salary_text and any(x in str(salary_text).lower() for x in ["mies", "m-c", "mc", "/ m", "zł/mies"]):
         return "full"
@@ -129,6 +129,7 @@ def fetch_url(url: str):
                 "Upgrade-Insecure-Requests": "1",
                 "Sec-Fetch-Dest": "document",
                 "Sec-Fetch-Mode": "navigate",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             },
             impersonate="chrome120",
             timeout=15,
@@ -142,7 +143,6 @@ def fetch_url(url: str):
 # ==================== DATABASE (BATCH ОПТИМИЗАЦИЯ) ====================
 
 def get_all_existing_ids() -> set:
-    """Загружает ID только за последние 7 дней (быстро и легко)"""
     try:
         existing = set()
         cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
@@ -166,7 +166,6 @@ def get_all_existing_ids() -> set:
 
 
 def db_insert_jobs_batch_sync(jobs_list: list) -> int:
-    """ПАКЕТНАЯ ВСТАВКА: 1 сетевой запрос на весь список вакансий"""
     if not jobs_list:
         return 0
     try:
@@ -232,7 +231,7 @@ async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
 
         jobs_to_save = []
 
-        for card in cards[:40]:
+        for card in cards:  # Считываем все карточки со страницы (глубокий парсинг)
             try:
                 title_tag = card.find("h4") or card.select_one("a[data-testid='card-title-link']")
                 link_tag = card.find("a", href=True)
@@ -248,7 +247,7 @@ async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
                     link = "https://www.olx.pl" + link
                 link = link.split("?")[0].split("#")[0]
 
-                # ==================== ФИЛЬТРАЦИЯ БИТЫХ ССЫЛОК И ПРОФИЛЕЙ ====================
+                # Фильтрация мусорных линков бренда/профилей
                 link_lower = link.lower()
                 if "olx.pl" in link_lower:
                     if "/oferta/" not in link_lower:
@@ -359,38 +358,42 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
 
 async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
     """
-    Обновленный парсер под актуальную верстку GoWork (Nuxt / Vue).
-    Забирает: заголовок, ссылку, город, зарплату, тип договора (в т.ч. из dropdown) и график.
+    Полностью переписанный парсер GoWork под твою верстку.
+    Умеет обходить Cloudflare и точно достает Договор (Umowa) и График (Etat).
     """
     try:
-        # ==================== УМНАЯ ЗАДЕРЖКА ДЛЯ ОБХОДА CLOUDFLARE ====================
-        # Добавляем случайную паузу от 1.5 до 4.2 секунд
-        await asyncio.sleep(random.uniform(1.5, 4.2))
+        # Случайная пауза для маскировки робота
+        await asyncio.sleep(random.uniform(2.0, 4.5))
 
         slug = get_city_slug(city)
         url = f"https://www.gowork.pl/praca/{slug};l" if slug else "https://www.gowork.pl/praca;l"
 
         status, html = await asyncio.to_thread(fetch_url, url)
         if status != 200 or not html:
-            logger.warning(f"GoWork returned status {status} for {city} (Possible block/Cloudflare)")
+            logger.warning(f"GoWork returned status {status} for {city}")
+            return 0
+
+        # Детекция блокировки Cloudflare
+        if "cloudflare" in html.lower() or "just a moment" in html.lower() or "noscript" in html.lower() and "enable javascript" in html.lower():
+            logger.warning(f"⚠️ GoWork page for {city} is protected by Cloudflare. Parsing skipped.")
             return 0
 
         soup = BeautifulSoup(html, "html.parser")
         cards = soup.select(".g-job-item")
         if not cards:
-            logger.info(f"GoWork: no cards found for {city}")
+            logger.info(f"GoWork: 0 cards found in HTML for {city}")
             return 0
 
         jobs_to_save = []
 
         for card in cards[:35]:
             try:
-                # 1. Заголовок и ссылка
-                title_el = card.select_one(".g-job-item__offer-title h3 a") \
-                           or card.select_one(".g-job-item__offer-title a")
+                # 1. Заголовок и Ссылка (точно по твоей верстке)
+                title_el = card.select_one(".g-job-item__offer-title h3 a.g-button")
                 if not title_el:
                     continue
 
+                # Достаем текст из тега <span class="g-button__text">
                 title_span = title_el.select_one("span.g-button__text")
                 title = strip_html(title_span.get_text(strip=True) if title_span else title_el.get_text(strip=True))
                 if not title or len(title) < 3:
@@ -410,9 +413,9 @@ async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
                         continue
                     existing_ids.add(ext_id)
 
-                # 2. Город из карточки
+                # 2. Город
                 job_city = city
-                loc_el = card.select_one(".g-job-location span:last-child") or card.select_one(".g-job-location")
+                loc_el = card.select_one(".g-job-location")
                 if loc_el:
                     loc_text = loc_el.get_text(" ", strip=True)
                     if len(loc_text) > 2:
@@ -421,20 +424,27 @@ async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
                 if not city_matches(job_city, city):
                     continue
 
-                # 3. Все теги карточки (включая скрытые в dropdown: umowa, тип занятости и т.д.)
+                # 3. Достаем ВСЕ теги карточки (Umowa, Etat, Salary)
                 tag_els = card.select(".g-job-item-content__tag")
                 tags = [strip_html(t.get_text(" ", strip=True)) for t in tag_els]
 
-                # Ищем зарплату среди тегов
                 salary = None
+                umowa_val = None
+                etat_val = None
+
+                # Парсим каждый тег отдельно по ключевым словам
                 for t in tags:
                     t_lower = t.lower()
                     if "zł" in t_lower or "pln" in t_lower or "eur" in t_lower:
                         salary = t
-                        break
+                    elif any(k in t_lower for k in ["umowa", "b2b", "staż", "staz", "dzieło", "zlecenie"]):
+                        umowa_val = t
+                    elif any(k in t_lower for k in ["etat", "part", "full", "niepełny", "pełny"]):
+                        etat_val = t
 
-                # Склеиваем весь текст карточки для надёжного поиска Умовы и Графика
-                all_card_text = " ".join(tags) + " " + title
+                # Если теги пустые — используем заголовок как запасной вариант
+                umowa_key = normalize_umowa(umowa_val) if umowa_val else normalize_umowa(title)
+                etat_key = normalize_etat(etat_val, salary) if etat_val else normalize_etat(title, salary)
 
                 jobs_to_save.append({
                     "external_id": ext_id,
@@ -443,8 +453,8 @@ async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
                     "salary": salary,
                     "url": link,
                     "source": "GoWork.pl",
-                    "umowa": normalize_umowa(all_card_text),
-                    "etat": normalize_etat(all_card_text, salary)
+                    "umowa": umowa_key,
+                    "etat": etat_key
                 })
             except Exception as e:
                 logger.debug(f"GoWork item parse error: {e}")
