@@ -102,7 +102,7 @@ def normalize_etat(text, salary_text=None):
     t = str(text).lower().strip()
     if any(x in t for x in ["parttime", "part time", "niepełny", "niepelny", "неполный", "неповний", "1/2", "3/4", "1/4", "pół etatu", "czesc etatu", "dodatkowa", "dorywcza", "student"]):
         return "part"
-    if any(x in t for x in ["fulltime", "full time", "pełny", "pelny", "pełеn", "pelen", "cały etat", "полный", "повний", "1/1", "etatowa"]):
+    if any(x in t for x in ["fulltime", "full time", "pełny", "pelny", "pełen", "pelen", "cały etat", "полный", "повний", "1/1", "etatowa"]):
         return "full"
     if salary_text and any(x in str(salary_text).lower() for x in ["mies", "m-c", "mc", "/ m", "zł/mies"]):
         return "full"
@@ -119,25 +119,41 @@ def city_matches(job_city, filter_city):
     return fc == jc or fc in jc or jc in fc
 
 
-def fetch_url(url: str):
+# ==================== ОПТИМИЗИРОВАННЫЙ ОБХОД БАНОВ ====================
+
+def fetch_url(url: str, impersonate_target: str = "chrome120"):
+    """
+    Выполняет запрос с чистым отпечатком TLS выбранного браузера.
+    Регистр заголовков (lowercase) строго соответствует HTTP/2 стандарту.
+    """
     try:
         r = cr.get(
             url,
             headers={
-                "Accept": "text/html,application/xhtml+xml,*/*",
-                "Accept-Language": "pl-PL,pl;q=0.9",
-                "Upgrade-Insecure-Requests": "1",
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                "accept-language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
             },
-            impersonate="chrome120",
+            impersonate=impersonate_target,
             timeout=15,
         )
         return r.status_code, r.text
     except Exception as e:
-        logger.error(f"fetch_url error for {url}: {e}")
+        logger.error(f"fetch_url error for {url} ({impersonate_target}): {e}")
         return 0, ""
+
+
+def fetch_url_with_retry(url: str):
+    """
+    Пытается скачать страницу, меняя отпечатки браузеров (Chrome -> Safari -> Edge)
+    при получении бана 403 от Cloudflare.
+    """
+    status, html = fetch_url(url, "chrome120")
+    if status == 403:
+        logger.warning(f"Got 403 with chrome120 for {url}. Retrying with safari15...")
+        status, html = fetch_url(url, "safari15")
+    if status == 403:
+        logger.warning(f"Got 403 with safari15 for {url}. Retrying with edge99...")
+        status, html = fetch_url(url, "edge99")
+    return status, html
 
 
 # ==================== DATABASE (BATCH ОПТИМИЗАЦИЯ) ====================
@@ -220,7 +236,7 @@ async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
     try:
         slug = get_city_slug(city)
         url = f"https://www.olx.pl/praca/{slug}/?search%5Border%5D=created_at:desc" if slug else "https://www.olx.pl/praca/?search%5Border%5D=created_at:desc"
-        status, html = await asyncio.to_thread(fetch_url, url)
+        status, html = await asyncio.to_thread(fetch_url_with_retry, url)
         if status != 200 or not html:
             return 0
 
@@ -231,7 +247,7 @@ async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
 
         jobs_to_save = []
 
-        for card in cards:  # Считываем все карточки со страницы (глубокий парсинг)
+        for card in cards:
             try:
                 title_tag = card.find("h4") or card.select_one("a[data-testid='card-title-link']")
                 link_tag = card.find("a", href=True)
@@ -247,7 +263,6 @@ async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
                     link = "https://www.olx.pl" + link
                 link = link.split("?")[0].split("#")[0]
 
-                # Фильтрация мусорных линков бренда/профилей
                 link_lower = link.lower()
                 if "olx.pl" in link_lower:
                     if "/oferta/" not in link_lower:
@@ -298,7 +313,7 @@ async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
 async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
     try:
         url = f"https://www.praca.pl/m-{get_city_slug(city)}_d-1.html?m={city}"
-        status, html = await asyncio.to_thread(fetch_url, url)
+        status, html = await asyncio.to_thread(fetch_url_with_retry, url)
         if status != 200 or not html:
             return 0
 
@@ -359,16 +374,15 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
 async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
     """
     Полностью переписанный парсер GoWork под твою верстку.
-    Умеет обходить Cloudflare и точно достает Договор (Umowa) и График (Etat).
+    Обходит блокировку Cloudflare и достает Договор (Umowa) и График (Etat).
     """
     try:
-        # Случайная пауза для маскировки робота
         await asyncio.sleep(random.uniform(2.0, 4.5))
 
         slug = get_city_slug(city)
         url = f"https://www.gowork.pl/praca/{slug};l" if slug else "https://www.gowork.pl/praca;l"
 
-        status, html = await asyncio.to_thread(fetch_url, url)
+        status, html = await asyncio.to_thread(fetch_url_with_retry, url)
         if status != 200 or not html:
             logger.warning(f"GoWork returned status {status} for {city}")
             return 0
@@ -388,12 +402,11 @@ async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
 
         for card in cards[:35]:
             try:
-                # 1. Заголовок и Ссылка (точно по твоей верстке)
+                # 1. Заголовок и Ссылка (строго по твоей верстке карточки)
                 title_el = card.select_one(".g-job-item__offer-title h3 a.g-button")
                 if not title_el:
                     continue
 
-                # Достаем текст из тега <span class="g-button__text">
                 title_span = title_el.select_one("span.g-button__text")
                 title = strip_html(title_span.get_text(strip=True) if title_span else title_el.get_text(strip=True))
                 if not title or len(title) < 3:
@@ -432,7 +445,6 @@ async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
                 umowa_val = None
                 etat_val = None
 
-                # Парсим каждый тег отдельно по ключевым словам
                 for t in tags:
                     t_lower = t.lower()
                     if "zł" in t_lower or "pln" in t_lower or "eur" in t_lower:
@@ -442,7 +454,6 @@ async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
                     elif any(k in t_lower for k in ["etat", "part", "full", "niepełny", "pełny"]):
                         etat_val = t
 
-                # Если теги пустые — используем заголовок как запасной вариант
                 umowa_key = normalize_umowa(umowa_val) if umowa_val else normalize_umowa(title)
                 etat_key = normalize_etat(etat_val, salary) if etat_val else normalize_etat(title, salary)
 
