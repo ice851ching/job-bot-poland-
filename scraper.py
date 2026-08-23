@@ -99,7 +99,7 @@ def normalize_etat(text, salary_text=None):
     if isinstance(text, (list, tuple, set)):
         text = " ".join(str(v) for v in text)
     t = str(text).lower().strip()
-    if any(x in t for x in ["parttime", "part time", "niepełny", "niepelny", "неполный", "неповний", "1/2", "3/4", "1/4", "2/3", "pół etatu", "czesc etatu", "dodatkowa", "dorywcza", "student"]):
+    if any(x in t for x in ["parttime", "part time", "niepełny", "niepelny", "неполный", "неповний", "1/2", "3/4", "1/4", "pół etatu", "czesc etatu", "dodatkowa", "dorywcza", "student"]):
         return "part"
     if any(x in t for x in ["fulltime", "full time", "pełny", "pelny", "pełen", "pelen", "cały etat", "полный", "повний", "1/1", "etatowa"]):
         return "full"
@@ -141,7 +141,6 @@ def fetch_url(url: str):
 # ==================== DATABASE (BATCH ОПТИМИЗАЦИЯ) ====================
 
 def get_all_existing_ids() -> set:
-    """Загружает ID только за последние 7 дней (быстро и легко)"""
     try:
         existing = set()
         cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
@@ -165,7 +164,6 @@ def get_all_existing_ids() -> set:
 
 
 def db_insert_jobs_batch_sync(jobs_list: list) -> int:
-    """ПАКЕТНАЯ ВСТАВКА: 1 сетевой запрос на весь список вакансий"""
     if not jobs_list:
         return 0
     try:
@@ -247,6 +245,14 @@ async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
                     link = "https://www.olx.pl" + link
                 link = link.split("?")[0].split("#")[0]
 
+                # ==================== ФИЛЬТРАЦИЯ БИТЫХ ССЫЛОК И ПРОФИЛЕЙ ====================
+                link_lower = link.lower()
+                if "olx.pl" in link_lower:
+                    if "/oferta/" not in link_lower:  # Если нет слова oferta — это ссылка на главную страницу бренда/магазина
+                        continue
+                    if "/uzytkownik/" in link_lower:  # Ссылка на профиль юзера
+                        continue
+
                 ext_id = hashlib.md5(f"olx_{link}".encode()).hexdigest()
 
                 async with lock:
@@ -279,7 +285,6 @@ async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
             except Exception as e:
                 logger.error(f"OLX card item error: {e}")
 
-        # Сохраняем все найденные вакансии 1 пакетом
         saved = await db_insert_jobs_batch(jobs_to_save)
         logger.info(f"OLX saved={saved} city={city}")
         return saved
