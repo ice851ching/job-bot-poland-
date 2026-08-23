@@ -102,7 +102,7 @@ def normalize_etat(text, salary_text=None):
     t = str(text).lower().strip()
     if any(x in t for x in ["parttime", "part time", "niepełny", "niepelny", "неполный", "неповний", "1/2", "3/4", "1/4", "pół etatu", "czesc etatu", "dodatkowa", "dorywcza", "student"]):
         return "part"
-    if any(x in t for x in ["fulltime", "full time", "pełny", "pelny", "pełen", "pelen", "cały etat", "полный", "повний", "1/1", "etatowa"]):
+    if any(x in t for x in ["fulltime", "full time", "pełny", "pelny", "pełен", "pelen", "cały etat", "полный", "повний", "1/1", "etatowa"]):
         return "full"
     if salary_text and any(x in str(salary_text).lower() for x in ["mies", "m-c", "mc", "/ m", "zł/mies"]):
         return "full"
@@ -119,40 +119,32 @@ def city_matches(job_city, filter_city):
     return fc == jc or fc in jc or jc in fc
 
 
-# ==================== ОПТИМИЗИРОВАННЫЙ ОБХОД БАНОВ ====================
+# ==================== ОПТИМИЗИРОВАННЫЙ СЕТЕВОЙ КЛИЕНТ ====================
 
-def fetch_url(url: str, impersonate_target: str = "chrome120"):
+def fetch_url(url: str, referer: str = None):
+    """
+    Эмулирует прямой переход реального браузера со всеми навигационными заголовками.
+    """
+    headers = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "cross-site" if referer else "none",
+        "Sec-Fetch-User": "?1",
+        "Cache-Control": "max-age=0",
+    }
+    if referer:
+        headers["Referer"] = referer
+
     try:
-        r = cr.get(
-            url,
-            headers={
-                "accept-language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
-            },
-            impersonate=impersonate_target,
-            timeout=15,
-        )
+        session = cr.Session(impersonate="chrome120")
+        r = session.get(url, headers=headers, timeout=15)
         return r.status_code, r.text
     except Exception as e:
-        logger.error(f"fetch_url error for {url} ({impersonate_target}): {e}")
+        logger.error(f"fetch_url error for {url}: {e}")
         return 0, ""
-
-
-TARGET_BROWSERS = ["chrome120", "chrome110", "edge101", "safari_mac_12_0"]
-
-def fetch_url_with_retry(url: str):
-    """
-    Пытается скачать страницу, поочередно меняя поддерживаемые отпечатки браузеров
-    (Chrome120 -> Chrome110 -> Edge101 -> Safari Mac) при получении 403.
-    """
-    for browser in TARGET_BROWSERS:
-        status, html = fetch_url(url, browser)
-        if status == 403:
-            logger.warning(f"Got 403 with {browser} for {url}. Retrying with next profile...")
-            import time
-            time.sleep(1.0)
-            continue
-        return status, html
-    return 403, ""
 
 
 # ==================== DATABASE (BATCH ОПТИМИЗАЦИЯ) ====================
@@ -235,7 +227,7 @@ async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
     try:
         slug = get_city_slug(city)
         url = f"https://www.olx.pl/praca/{slug}/?search%5Border%5D=created_at:desc" if slug else "https://www.olx.pl/praca/?search%5Border%5D=created_at:desc"
-        status, html = await asyncio.to_thread(fetch_url_with_retry, url)
+        status, html = await asyncio.to_thread(fetch_url, url, "https://www.google.com/")
         if status != 200 or not html:
             return 0
 
@@ -312,7 +304,7 @@ async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
 async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
     try:
         url = f"https://www.praca.pl/m-{get_city_slug(city)}_d-1.html?m={city}"
-        status, html = await asyncio.to_thread(fetch_url_with_retry, url)
+        status, html = await asyncio.to_thread(fetch_url, url, "https://www.google.com/")
         if status != 200 or not html:
             return 0
 
@@ -372,31 +364,28 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
 
 async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
     try:
-        await asyncio.sleep(random.uniform(2.0, 4.5))
+        # Человеческая пауза перед переходом
+        await asyncio.sleep(random.uniform(1.5, 3.5))
 
         slug = get_city_slug(city)
         url = f"https://www.gowork.pl/praca/{slug};l" if slug else "https://www.gowork.pl/praca;l"
 
-        status, html = await asyncio.to_thread(fetch_url_with_retry, url)
+        # Симулируем переход с поисковика Google
+        status, html = await asyncio.to_thread(fetch_url, url, "https://www.google.pl/")
         if status != 200 or not html:
             logger.warning(f"GoWork returned status {status} for {city}")
-            return 0
-
-        if "cloudflare" in html.lower() or "just a moment" in html.lower() or "noscript" in html.lower() and "enable javascript" in html.lower():
-            logger.warning(f"⚠️ GoWork page for {city} is protected by Cloudflare. Parsing skipped.")
             return 0
 
         soup = BeautifulSoup(html, "html.parser")
         cards = soup.select(".g-job-item")
         if not cards:
-            logger.info(f"GoWork: 0 cards found in HTML for {city}")
             return 0
 
         jobs_to_save = []
 
         for card in cards[:35]:
             try:
-                title_el = card.select_one(".g-job-item__offer-title h3 a.g-button")
+                title_el = card.select_one(".g-job-item__offer-title h3 a.g-button") or card.select_one(".g-job-item__offer-title a")
                 if not title_el:
                     continue
 
