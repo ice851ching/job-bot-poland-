@@ -141,6 +141,7 @@ def fetch_url(url: str):
 # ==================== DATABASE (BATCH ОПТИМИЗАЦИЯ) ====================
 
 def get_all_existing_ids() -> set:
+    """Загружает ID только за последние 7 дней (быстро и легко)"""
     try:
         existing = set()
         cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
@@ -164,6 +165,7 @@ def get_all_existing_ids() -> set:
 
 
 def db_insert_jobs_batch_sync(jobs_list: list) -> int:
+    """ПАКЕТНАЯ ВСТАВКА: 1 сетевой запрос на весь список вакансий"""
     if not jobs_list:
         return 0
     try:
@@ -212,7 +214,7 @@ def get_active_cities_from_db() -> list:
         return []
 
 
-# ==================== ПАРСЕРЫ (ЧИСТЫЙ HTML, НОЛЬ JSON) ====================
+# ==================== ПАРСЕРЫ ====================
 
 async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
     try:
@@ -248,9 +250,9 @@ async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
                 # ==================== ФИЛЬТРАЦИЯ БИТЫХ ССЫЛОК И ПРОФИЛЕЙ ====================
                 link_lower = link.lower()
                 if "olx.pl" in link_lower:
-                    if "/oferta/" not in link_lower:  # Если нет слова oferta — это ссылка на главную страницу бренда/магазина
+                    if "/oferta/" not in link_lower:
                         continue
-                    if "/uzytkownik/" in link_lower:  # Ссылка на профиль юзера
+                    if "/uzytkownik/" in link_lower:
                         continue
 
                 ext_id = hashlib.md5(f"olx_{link}".encode()).hexdigest()
@@ -355,28 +357,46 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
 
 
 async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
+    """
+    Обновленный парсер под актуальную верстку GoWork (Nuxt / Vue).
+    Забирает: заголовок, ссылку, город, зарплату, тип договора (в т.ч. из dropdown) и график.
+    """
     try:
-        url = f"https://www.gowork.pl/praca/{get_city_slug(city)};l"
+        slug = get_city_slug(city)
+        url = f"https://www.gowork.pl/praca/{slug};l" if slug else "https://www.gowork.pl/praca;l"
+
         status, html = await asyncio.to_thread(fetch_url, url)
         if status != 200 or not html:
+            logger.warning(f"GoWork returned status {status} for {city}")
             return 0
 
         soup = BeautifulSoup(html, "html.parser")
         cards = soup.select(".g-job-item")
+        if not cards:
+            logger.info(f"GoWork: no cards found for {city}")
+            return 0
+
         jobs_to_save = []
 
-        for card in cards[:30]:
+        for card in cards[:35]:
             try:
-                title_el = card.select_one(".g-job-item__offer-title a")
+                # 1. Заголовок и ссылка
+                title_el = card.select_one(".g-job-item__offer-title h3 a") \
+                           or card.select_one(".g-job-item__offer-title a")
                 if not title_el:
                     continue
-                title = strip_html(title_el.get_text(strip=True))
-                if not title:
+
+                title_span = title_el.select_one("span.g-button__text")
+                title = strip_html(title_span.get_text(strip=True) if title_span else title_el.get_text(strip=True))
+                if not title or len(title) < 3:
                     continue
 
-                link = title_el.get("href", "")
+                link = title_el.get("href", "").strip()
+                if not link:
+                    continue
                 if not link.startswith("http"):
                     link = "https://www.gowork.pl" + link
+                link = link.split("?")[0].split("#")[0]
 
                 ext_id = hashlib.md5(f"gowork_{link}".encode()).hexdigest()
 
@@ -385,18 +405,32 @@ async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
                         continue
                     existing_ids.add(ext_id)
 
+                # 2. Город из карточки
                 job_city = city
-                loc_el = card.select_one(".g-job-location span")
+                loc_el = card.select_one(".g-job-location span:last-child") or card.select_one(".g-job-location")
                 if loc_el:
-                    t = loc_el.get_text(strip=True)
-                    if len(t) > 2:
-                        job_city = strip_html(t)
+                    loc_text = loc_el.get_text(" ", strip=True)
+                    if len(loc_text) > 2:
+                        job_city = strip_html(loc_text)
+
                 if not city_matches(job_city, city):
                     continue
 
-                tags = [sp.get_text(strip=True) for tag in card.select(".g-job-item-content__tag") for sp in tag.select("span")]
-                salary = next((strip_html(t) for t in tags if "zł" in t.lower() or "pln" in t.lower()), None)
-                combined = " ".join(tags)
+                # 3. Все теги карточки (включая скрытые в dropdown: umowa, тип занятости и т.д.)
+                tag_els = card.select(".g-job-item-content__tag")
+                tags = [strip_html(t.get_text(" ", strip=True)) for t in tag_els]
+
+                # Ищем зарплату среди тегов
+                salary = None
+                for t in tags:
+                    t_lower = t.lower()
+                    if "zł" in t_lower or "pln" in t_lower or "eur" in t_lower:
+                        # Отсекаем "kg" и прочий мусор — оставляем только строки с валютой
+                        salary = t
+                        break
+
+                # Склеиваем весь текст карточки для надёжного поиска Умовы и Графика
+                all_card_text = " ".join(tags) + " " + title
 
                 jobs_to_save.append({
                     "external_id": ext_id,
@@ -405,11 +439,11 @@ async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
                     "salary": salary,
                     "url": link,
                     "source": "GoWork.pl",
-                    "umowa": normalize_umowa(combined) or normalize_umowa(title),
-                    "etat": normalize_etat(combined, salary) or normalize_etat(title, salary)
+                    "umowa": normalize_umowa(all_card_text),
+                    "etat": normalize_etat(all_card_text, salary)
                 })
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"GoWork item parse error: {e}")
 
         saved = await db_insert_jobs_batch(jobs_to_save)
         logger.info(f"GoWork saved={saved} city={city}")
