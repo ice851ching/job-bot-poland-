@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 import re
+import time
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
@@ -356,9 +357,6 @@ def strip_html(text):
 
 
 def get_all_job_umowas(raw_umowa):
-    """
-    Парсит и вытаскивает все типы договоров из комбинированных строк базы.
-    """
     if not raw_umowa:
         return []
     u = str(raw_umowa).lower().strip().replace("_", " ").replace("-", " ")
@@ -397,14 +395,12 @@ def job_matches_filter(job, user_filter):
     job_umowas = get_all_job_umowas(job.get("umowa"))
     job_etat = normalize_etat(job.get("etat"))
 
-    # 1. Проверка по договору (Umowa)
     if uf != "any":
         if job_umowas and uf not in job_umowas:
             return False
         if not job_umowas and uf in ["b2b", "staz", "umowa_o_dzielo"]:
             return False
 
-    # 2. Проверка по занятости (Etat)
     if not (ef and ep):
         if job_etat:
             if ep and not ef and job_etat == "full":
@@ -423,7 +419,6 @@ def is_delivery_job(job):
 
 
 def is_invalid_olx_url(url: str) -> bool:
-    """Отсекает битые ссылки OLX: профили пользователей и главные страницы магазинов."""
     if not url:
         return True
     
@@ -438,7 +433,6 @@ def is_invalid_olx_url(url: str) -> bool:
 
 
 def is_night_time() -> bool:
-    """Определяет ночь по Польше (23:00 - 08:00)"""
     now_utc = datetime.now(timezone.utc)
     month = now_utc.month
     offset_hours = 2 if 3 < month < 11 else 1
@@ -447,7 +441,6 @@ def is_night_time() -> bool:
 
 
 def parse_iso_datetime(dt_str: str) -> datetime:
-    """Безопасно переводит ISO строку даты во временной объект с таймзоной."""
     if not dt_str:
         return datetime.min.replace(tzinfo=timezone.utc)
     dt_str = dt_str.replace("Z", "+00:00")
@@ -541,29 +534,42 @@ def db_get_all_active_users():
 
 
 def db_get_sent_job_ids(tid) -> set:
-    try:
-        r = supabase.table("sent_jobs").select("job_id").eq("telegram_id", tid).execute()
-        return {row["job_id"] for row in r.data} if r.data else set()
-    except Exception as e:
-        logger.error(f"db_get_sent_job_ids error for {tid}: {e}")
-        return set()
+    """С повторной попыткой при ошибке [Errno 11] Resource temporarily unavailable"""
+    for attempt in range(3):
+        try:
+            r = supabase.table("sent_jobs").select("job_id").eq("telegram_id", tid).execute()
+            return {row["job_id"] for row in r.data} if r.data else set()
+        except Exception as e:
+            err_text = str(e)
+            if ("Errno 11" in err_text or "temporarily unavailable" in err_text.lower()) and attempt < 2:
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            logger.error(f"db_get_sent_job_ids error for {tid}: {e}")
+            return set()
+    return set()
 
 
 def db_mark_sent_batch(tid, job_ids: list) -> bool:
-    """Пакетная безошибочная фиксация отправки (upsert без дублей)"""
+    """С повторной попыткой при ошибке [Errno 11] Resource temporarily unavailable"""
     if not job_ids:
         return True
-    try:
-        records = [{"telegram_id": tid, "job_id": jid} for jid in job_ids]
-        supabase.table("sent_jobs").upsert(
-            records,
-            on_conflict="telegram_id,job_id",
-            ignore_duplicates=True
-        ).execute()
-        return True
-    except Exception as e:
-        logger.error(f"db_mark_sent_batch error for {tid}: {e}")
-        return False
+    for attempt in range(3):
+        try:
+            records = [{"telegram_id": tid, "job_id": jid} for jid in job_ids]
+            supabase.table("sent_jobs").upsert(
+                records,
+                on_conflict="telegram_id,job_id",
+                ignore_duplicates=True
+            ).execute()
+            return True
+        except Exception as e:
+            err_text = str(e)
+            if ("Errno 11" in err_text or "temporarily unavailable" in err_text.lower()) and attempt < 2:
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            logger.error(f"db_mark_sent_batch error for {tid}: {e}")
+            return False
+    return False
 
 
 def db_clear_sent(tid):
@@ -706,10 +712,6 @@ async def send_promo(chat_id):
 
 
 async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=False):
-    """
-    Отправляет вакансии одному пользователю с индивидуальной блокировкой (Lock),
-    исключая Race condition и дубликаты.
-    """
     async with get_user_lock(tid):
         sent, sf, ss, blocked = 0, 0, 0, 0
         already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, tid)
@@ -723,7 +725,6 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
             if job_id is None:
                 continue
 
-            # Отсекаем битые ссылки и ссылки на профили пользователей OLX
             if is_invalid_olx_url(job.get("url")):
                 continue
 
@@ -1162,9 +1163,6 @@ async def on_renew_search(c: CallbackQuery):
 # ==================== SCHEDULER (НЕБЛОКИРУЮЩИЙ) ====================
 
 async def scheduled_check():
-    """
-    Основной цикл поиска новых вакансий.
-    """
     started = datetime.now(timezone.utc)
 
     if is_night_time():
@@ -1184,7 +1182,6 @@ async def scheduled_check():
         now = datetime.now(timezone.utc)
         active_filters = []
 
-        # Проверяем 3-дневное продление
         for f in filters:
             tid = f["telegram_id"]
             last_renewal_str = f.get("last_renewal")
@@ -1244,7 +1241,8 @@ async def scheduled_check():
                 city_jobs[city] = result or []
                 logger.info(f"📦 {city}: {len(city_jobs[city])} jobs")
 
-        semaphore = asyncio.Semaphore(8)
+        # ==================== СНИЖЕН СЕМАФОР С 8 ДО 5 ДЛЯ СТАБИЛЬНОСТИ RENDER ====================
+        semaphore = asyncio.Semaphore(5)
 
         async def process_user(f):
             tid = f["telegram_id"]
@@ -1260,7 +1258,6 @@ async def scheduled_check():
                 logger.info(f"👤 {tid}: no fresh jobs for {city}")
                 return 0
 
-            # Отсекаем ВСЁ, что было создано в базе ДО того, как пользователь запустил поиск
             user_renewal_time = parse_iso_datetime(f.get("last_renewal"))
             
             fresh_jobs = []
@@ -1322,7 +1319,6 @@ async def main():
     logger.info("🚀 Bot starting...")
     await start_web_server()
 
-    # ОГРАНИЧЕНИЕ ПОТОКОВ: Убивает [Errno 11] Resource temporarily unavailable на Render
     try:
         loop = asyncio.get_running_loop()
         loop.set_default_executor(ThreadPoolExecutor(max_workers=5))
