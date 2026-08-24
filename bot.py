@@ -380,7 +380,7 @@ def normalize_etat(etat):
     e = str(etat).lower().strip()
     if any(x in e for x in ["part", "niepełny", "niepelny", "1/2", "3/4", "1/4", "pół etatu", "pol etatu", "dodatkowa"]):
         return "part"
-    if any(x in e for x in ["full", "pełny", "pelny", "pełen", "pelen", "cały etat", "caly etat"]):
+    if any(x in e for x in ["full", "pełny", "pelny", "pełен", "pelen", "cały etat", "caly etat"]):
         return "full"
     return None
 
@@ -701,13 +701,13 @@ def format_job(job):
     if job.get("url"):
         lines.append(f"🔗 <a href='{job['url']}'>Открыть вакансию</a>")
     lines.append("")
-    lines.append("🤖 <a href='https://t.me/szukam_pracy_bot'>@szukam_pracy_bot</a> — свежие вакансии в Польше 🇵🇱")
+    lines.append("🤖 <a href='https://t.me/szukam_pracy_bot'>@szukam_pracy_bot</a> — свежие вакансии в <a href='https://t.me/szukam_pracy_bot'>Польше 🇵🇱</a>")
     return "\n".join(lines)
 
 
 async def send_promo(chat_id):
     try:
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚀 Начать", url=REF_LINK)]])
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚀 Начать работу курьером", url=REF_LINK)]])
         sent_msg = await bot.send_message(chat_id, PROMO_TEXT, reply_markup=kb, parse_mode="HTML")
         try:
             await bot.pin_chat_message(chat_id=chat_id, message_id=sent_msg.message_id, disable_notification=True)
