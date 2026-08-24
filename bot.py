@@ -541,7 +541,7 @@ def db_get_sent_job_ids(tid) -> set:
             return {row["job_id"] for row in r.data} if r.data else set()
         except Exception as e:
             err_text = str(e)
-            if ("Errno 11" in err_text or "temporarily unavailable" in err_text.lower()) and attempt < 2:
+            if ("errno 11" in err_text.lower() or "temporarily unavailable" in err_text.lower()) and attempt < 2:
                 time.sleep(0.5 * (attempt + 1))
                 continue
             logger.error(f"db_get_sent_job_ids error for {tid}: {e}")
@@ -564,7 +564,7 @@ def db_mark_sent_batch(tid, job_ids: list) -> bool:
             return True
         except Exception as e:
             err_text = str(e)
-            if ("Errno 11" in err_text or "temporarily unavailable" in err_text.lower()) and attempt < 2:
+            if ("errno 11" in err_text.lower() or "temporarily unavailable" in err_text.lower()) and attempt < 2:
                 time.sleep(0.5 * (attempt + 1))
                 continue
             logger.error(f"db_mark_sent_batch error for {tid}: {e}")
@@ -604,26 +604,32 @@ def db_pause_search_filter(tid):
 
 
 def db_get_jobs_for_city(city, limit=150, hours=24):
-    try:
-        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-        fields = "id, external_id, title, city, salary, url, source, umowa, etat, created_at"
+    """С повторной попыткой при ошибке [Errno 11] Resource temporarily unavailable"""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    fields = "id, external_id, title, city, salary, url, source, umowa, etat, created_at"
+    for attempt in range(3):
+        try:
+            if city == "all":
+                r = supabase.table("jobs").select(fields).gt("created_at", cutoff).order("created_at", desc=True).limit(limit).execute()
+                return r.data or []
 
-        if city == "all":
-            r = supabase.table("jobs").select(fields).gt("created_at", cutoff).order("created_at", desc=True).limit(limit).execute()
+            slug = get_city_slug(city)
+            r = supabase.table("jobs") \
+                .select(fields) \
+                .or_(f"city.ilike.%{city}%,city.ilike.%{slug}%") \
+                .gt("created_at", cutoff) \
+                .order("created_at", desc=True) \
+                .limit(limit) \
+                .execute()
             return r.data or []
-
-        slug = get_city_slug(city)
-        r = supabase.table("jobs") \
-            .select(fields) \
-            .or_(f"city.ilike.%{city}%,city.ilike.%{slug}%") \
-            .gt("created_at", cutoff) \
-            .order("created_at", desc=True) \
-            .limit(limit) \
-            .execute()
-        return r.data or []
-    except Exception as e:
-        logger.error(f"db_get_jobs_for_city: {e}")
-        return []
+        except Exception as e:
+            err_text = str(e)
+            if ("errno 11" in err_text.lower() or "temporarily unavailable" in err_text.lower()) and attempt < 2:
+                time.sleep(0.3 * (attempt + 1))
+                continue
+            logger.error(f"db_get_jobs_for_city error: {e}")
+            return []
+    return []
 
 
 # ==================== GITHUB TRIGGER ====================
@@ -1160,6 +1166,25 @@ async def on_renew_search(c: CallbackQuery):
         logger.warning(f"on_renew_search error: {e}")
 
 
+# ==================== VIP AUTOMATIC GITHUB TRIGGER ====================
+
+async def auto_trigger_github_scraper():
+    """
+    Каждые 25 минут пинает GitHub через VIP API для мгновенного и точного парсинга по расписанию.
+    """
+    if is_night_time():
+        logger.info("🌙 Night time — skipping auto-trigger of GitHub Scraper.")
+        return
+        
+    logger.info("🚀 Triggering scheduled instant scrape via GitHub API...")
+    # Передаем пустую строку, чтобы запустить ПОЛНЫЙ сбор по всем активным городам!
+    ok = await trigger_scraper_for_city("")
+    if ok:
+        logger.info("✅ GitHub Scraper successfully triggered via VIP API!")
+    else:
+        logger.warning("⚠️ Failed to trigger GitHub Scraper via API.")
+
+
 # ==================== SCHEDULER (НЕБЛОКИРУЮЩИЙ) ====================
 
 async def scheduled_check():
@@ -1241,7 +1266,6 @@ async def scheduled_check():
                 city_jobs[city] = result or []
                 logger.info(f"📦 {city}: {len(city_jobs[city])} jobs")
 
-        # ==================== СНИЖЕН СЕМАФОР С 8 ДО 5 ДЛЯ СТАБИЛЬНОСТИ RENDER ====================
         semaphore = asyncio.Semaphore(5)
 
         async def process_user(f):
@@ -1327,6 +1351,8 @@ async def main():
         logger.warning(f"Failed to set custom thread pool executor: {e}")
 
     s = AsyncIOScheduler(timezone="UTC")
+    
+    # 1. Задача регулярной проверки новых вакансий в БД (Каждые 15 минут)
     s.add_job(
         scheduled_check,
         "interval",
@@ -1338,9 +1364,23 @@ async def main():
         misfire_grace_time=300,
         next_run_time=datetime.now(timezone.utc) + timedelta(seconds=10),
     )
+    
+    # 2. VIP-задача автоматического запуска парсера на GitHub (Каждые 25 минут секунда в секунду)
+    s.add_job(
+        auto_trigger_github_scraper,
+        "interval",
+        minutes=25,
+        id="github_scraper",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=20),
+    )
+    
     s.start()
 
-    logger.info("⏰ Scheduler started: first check in 10s, then every 15m")
+    logger.info("⏰ Scheduler started: first check in 10s, VIP scraper trigger in 20s, then regular intervals")
 
     try:
         await dp.start_polling(bot)
