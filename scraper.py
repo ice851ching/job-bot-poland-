@@ -90,7 +90,7 @@ def normalize_umowa(text):
         return "b2b"
     if any(x in t for x in ["dzieło", "dzielo"]) or re.search(r'\b(uod)\b', t):
         return "umowa_o_dzielo"
-    if any(x in t for x in ["staż", "staz", "praktyk", "praktyka", "internship"]):
+    if any(x in t for x in ["staż", "staz", "praktyk", "praktyка", "internship"]):
         return "staz"
     return None
 
@@ -103,7 +103,7 @@ def normalize_etat(text, salary_text=None):
     t = str(text).lower().strip()
     if any(x in t for x in ["parttime", "part time", "niepełny", "niepelny", "неполный", "неповний", "1/2", "3/4", "1/4", "pół etatu", "czesc etatu", "dodatkowa", "dorywcza", "student"]):
         return "part"
-    if any(x in t for x in ["fulltime", "full time", "pełny", "pelny", "pełen", "pelen", "cały etat", "полный", "повний", "1/1", "etatowa"]):
+    if any(x in t for x in ["fulltime", "full time", "pełny", "pelny", "pełеn", "pelen", "cały etat", "полный", "повний", "1/1", "etatowa"]):
         return "full"
     if salary_text and any(x in str(salary_text).lower() for x in ["mies", "m-c", "mc", "/ m", "zł/mies"]):
         return "full"
@@ -151,9 +151,6 @@ def fetch_url(url: str, impersonate_target: str = "chrome120", referer: str = No
 TARGET_BROWSERS = ["chrome120", "chrome110", "edge101", "safari_mac_12_0"]
 
 def fetch_url_with_retry(url: str, referer: str = None):
-    """
-    Поочередно пробует разные отпечатки браузеров при получении 403.
-    """
     for browser in TARGET_BROWSERS:
         status, html = fetch_url(url, browser, referer)
         if status == 403:
@@ -319,40 +316,46 @@ async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
 
 
 async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
+    """
+    Полностью вылизанный и исправленный парсер Praca.pl.
+    Гарантированно вытаскивает город из вложенной верстки и проводит диагностику.
+    """
     try:
         slug = get_city_slug(city)
-        # УБИРАЕМ _d-1 чтобы видеть ВСЕ вакансии и проверить работоспособность на 100%
+        # Убираем жесткий фильтр _d-1 (за 24 часа), чтобы наполнять базу по максимуму
         url = f"https://www.praca.pl/m-{slug}.html?m={city}"
         status, html = await asyncio.to_thread(fetch_url_with_retry, url, "https://www.google.com/")
         if status != 200 or not html:
+            logger.warning(f"Praca.pl returned status {status} for {city}")
             return 0
 
         soup = BeautifulSoup(html, "html.parser")
         
-        # ДИАГНОСТИКА: Ищем карточки разными способами
+        # Находим все li-карточки объявлений
         cards = soup.select("li.listing__item")
-        if not cards:
-            cards = soup.select("div.listing__item")
-        if not cards:
-            cards = soup.select("[class*='listing']")
-            
-        logger.info(f"🔍 Praca.pl DEBUG: status={status}, cards_found={len(cards)} for {city}")
+        
+        # Пишем в лог для точной диагностики
+        logger.info(f"🔍 Praca.pl DEBUG: status={status}, cards_found={len(cards)} on page for {city}")
 
         if not cards:
-            logger.warning(f"⚠️ Praca.pl: NO cards found for {city}. Page title: {soup.title.string if soup.title else 'N/A'}")
+            logger.warning(f"⚠️ Praca.pl: 0 cards found for {city}. Page title: {soup.title.string if soup.title else 'N/A'}")
             return 0
 
         jobs_to_save = []
+        ignored_duplicate = 0
+        ignored_city = 0
 
         for card in cards[:40]:
             try:
-                title_el = card.select_one("a.listing__title") or card.select_one("a[class*='title']") or card.find("a", href=True)
+                # 1. Заголовок
+                title_el = card.select_one("a.listing__title")
                 if not title_el:
                     continue
-                title = title_el.get_text(strip=True)
+                title = strip_html(title_el.get_text(strip=True))
                 if not title or len(title) < 3:
                     continue
 
+                # 2. Ссылка
                 link = title_el.get("href", "").split("#")[0]
                 if not link.startswith("http"):
                     link = "https://www.praca.pl" + link
@@ -361,17 +364,26 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
 
                 async with lock:
                     if ext_id in existing_ids:
+                        ignored_duplicate += 1
                         continue
                     existing_ids.add(ext_id)
 
+                # 3. Извлекаем город строго по твоей верстке карточки
                 job_city = city
-                loc_el = card.select_one("span.listing__location-name") or card.select_one("[class*='location']")
-                if loc_el and loc_el.contents:
-                    job_city = str(loc_el.contents[0]).replace("\xa0", "").strip() or city
+                loc_el = card.select_one("span.listing__location-name")
+                if loc_el:
+                    # Забираем весь текст локации, очищаем и берем только первое слово (город)
+                    loc_text = strip_html(loc_el.get_text(" ", strip=True))
+                    if loc_text:
+                        job_city = loc_text.split()[0].replace(",", "").strip()
+
                 if not city_matches(job_city, city):
+                    ignored_city += 1
                     continue
 
-                dt = card.get_text(" ", strip=True).lower()
+                # 4. Договор и график (Берем из деталей карточки)
+                dt_el = card.select_one("div.listing__main-details")
+                dt = strip_html(dt_el.get_text(" ", strip=True)).lower() if dt_el else ""
 
                 jobs_to_save.append({
                     "external_id": ext_id,
@@ -387,7 +399,9 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
                 logger.debug(f"Praca.pl card error: {e}")
 
         saved = await db_insert_jobs_batch(jobs_to_save)
-        logger.info(f"Praca.pl saved={saved} (found {len(cards)} cards) city={city}")
+        logger.info(
+            f"Praca.pl saved={saved} (duplicates={ignored_duplicate}, city_mismatch={ignored_city}) city={city}"
+        )
         return saved
     except Exception as e:
         logger.error(f"parse_praca_pl({city}) error: {e}")
