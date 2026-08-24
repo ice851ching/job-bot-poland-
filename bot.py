@@ -707,7 +707,7 @@ def format_job(job):
 
 async def send_promo(chat_id):
     try:
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚀 Получить 50 PLN и начать", url=REF_LINK)]])
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚀 Начать", url=REF_LINK)]])
         sent_msg = await bot.send_message(chat_id, PROMO_TEXT, reply_markup=kb, parse_mode="HTML")
         try:
             await bot.pin_chat_message(chat_id=chat_id, message_id=sent_msg.message_id, disable_notification=True)
