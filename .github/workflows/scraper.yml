@@ -1,9 +1,6 @@
 name: scraper
 
 on:
-  schedule:
-    # Смещаем минуты, чтобы обойти пики нагрузки GitHub (:17 и :47)
-    - cron: "17,47 6-21 * * *"
   workflow_dispatch:
     inputs:
       city:
@@ -11,7 +8,7 @@ on:
         required: false
         default: ""
 
-# Не дает запустить 2 парсера одновременно, убивает зависший прошлый
+# Не дает запустить 2 парсера одновременно
 concurrency:
   group: scraper-group
   cancel-in-progress: true
@@ -19,7 +16,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 10 # Завершит ранер, если он подвис более чем на 10 минут
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repo
@@ -44,6 +41,6 @@ jobs:
             echo "Running on-demand scrape for city: ${{ github.event.inputs.city }}"
             python scraper.py --city "${{ github.event.inputs.city }}"
           else
-            echo "Running scheduled scrape"
+            echo "Running full scrape for all active cities"
             python scraper.py
           fi
