@@ -53,12 +53,12 @@ def get_user_lock(tid: int) -> asyncio.Lock:
         USER_LOCKS[tid] = asyncio.Lock()
     return USER_LOCKS[tid]
 
-REF_LINK = "https://panel.city-drive.pl/ref/PracaBOT"
+REF_LINK = "https://kierowca.mbpartners.pl/rejestracja/?invitation=048A521B"
 DONATE_ACCOUNT = "84 9511 0000 0052 9681 3000 0010"
 
 PROMO_TEXT = (
     "💼 <b>Ищешь подработку с гибким графиком в Польше?</b>\n\n"
-    "Подключайся к доставке через <b>City Drive</b> и выходи на заказы в "
+    "Подключайся к доставке через <b>MB Partners</b> и выходи на заказы в "
     "<b>Glovo / Uber Eats / Bolt Food</b>.\n\n"
     "Что по условиям:\n"
     "• свободный график — можно совмещать с учёбой или основной работой\n"
@@ -66,7 +66,7 @@ PROMO_TEXT = (
     "• можно работать на своём авто, велосипеде или самокате\n"
     "• быстрый старт через проверенного партнёра\n\n"
     "🎁 <b>Бонус для новых:</b> 50 PLN на баланс при регистрации\n"
-    "🏷 <b>Промокод:</b> PracaBOT\n\n"
+    "🏷 <b>Промокод:</b> 048A521B\n\n"
     "👇 Нажми на кнопку ниже, чтобы оставить заявку"
 )
 
