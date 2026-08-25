@@ -120,7 +120,7 @@ def city_matches(job_city, filter_city):
     return fc == jc or fc in jc or jc in fc
 
 
-# ==================== ОПТИМИЗИРОВАННЫЙ СЕТЕВОЙ КЛИЕНТ ====================
+# ==================== СЕТЕВОЙ КЛИЕНТ ====================
 
 def fetch_url(url: str, impersonate_target: str = "chrome120", referer: str = None):
     headers = {
@@ -161,7 +161,7 @@ def fetch_url_with_retry(url: str, referer: str = None):
     return 403, ""
 
 
-# ==================== DATABASE (BATCH ОПТИМИЗАЦИЯ) ====================
+# ==================== DATABASE ====================
 
 def get_all_existing_ids() -> set:
     try:
@@ -316,13 +316,8 @@ async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
 
 
 async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
-    """
-    Полностью вылизанный и исправленный парсер Praca.pl.
-    Гарантированно вытаскивает город из вложенной верстки и проводит диагностику.
-    """
     try:
         slug = get_city_slug(city)
-        # Убираем жесткий фильтр _d-1 (за 24 часа), чтобы наполнять базу по максимуму
         url = f"https://www.praca.pl/m-{slug}.html?m={city}"
         status, html = await asyncio.to_thread(fetch_url_with_retry, url, "https://www.google.com/")
         if status != 200 or not html:
@@ -330,11 +325,8 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
             return 0
 
         soup = BeautifulSoup(html, "html.parser")
-        
-        # Находим все li-карточки объявлений
         cards = soup.select("li.listing__item")
         
-        # Пишем в лог для точной диагностики
         logger.info(f"🔍 Praca.pl DEBUG: status={status}, cards_found={len(cards)} on page for {city}")
 
         if not cards:
@@ -347,7 +339,6 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
 
         for card in cards[:40]:
             try:
-                # 1. Заголовок
                 title_el = card.select_one("a.listing__title")
                 if not title_el:
                     continue
@@ -355,7 +346,6 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
                 if not title or len(title) < 3:
                     continue
 
-                # 2. Ссылка
                 link = title_el.get("href", "").split("#")[0]
                 if not link.startswith("http"):
                     link = "https://www.praca.pl" + link
@@ -368,11 +358,9 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
                         continue
                     existing_ids.add(ext_id)
 
-                # 3. Извлекаем город строго по твоей верстке карточки
                 job_city = city
                 loc_el = card.select_one("span.listing__location-name")
                 if loc_el:
-                    # Забираем весь текст локации, очищаем и берем только первое слово (город)
                     loc_text = strip_html(loc_el.get_text(" ", strip=True))
                     if loc_text:
                         job_city = loc_text.split()[0].replace(",", "").strip()
@@ -381,7 +369,6 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
                     ignored_city += 1
                     continue
 
-                # 4. Договор и график (Берем из деталей карточки)
                 dt_el = card.select_one("div.listing__main-details")
                 dt = strip_html(dt_el.get_text(" ", strip=True)).lower() if dt_el else ""
 
@@ -408,102 +395,99 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
         return 0
 
 
-async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
+async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
+    """
+    Полированный, сверхстабильный парсер RocketJobs.pl по целевым категориям.
+    Парсит: support, gastronomia, praca-w-sklepie с эмуляцией пауз между ними.
+    """
     try:
-        await asyncio.sleep(random.uniform(2.0, 4.5))
-
         slug = get_city_slug(city)
-        url = f"https://www.gowork.pl/praca/{slug};l" if slug else "https://www.gowork.pl/praca;l"
-
-        status, html = await asyncio.to_thread(fetch_url_with_retry, url, "https://www.google.pl/")
-        if status != 200 or not html:
-            logger.warning(f"GoWork returned status {status} for {city}")
+        if not slug:
             return 0
 
-        if "cloudflare" in html.lower() or "just a moment" in html.lower() or "noscript" in html.lower() and "enable javascript" in html.lower():
-            logger.warning(f"⚠️ GoWork page for {city} is protected by Cloudflare. Parsing skipped.")
-            return 0
-
-        soup = BeautifulSoup(html, "html.parser")
-        cards = soup.select(".g-job-item")
-        if not cards:
-            logger.info(f"GoWork: 0 cards found in HTML for {city}")
-            return 0
-
+        categories = ["support", "gastronomia", "praca-w-sklepie"]
         jobs_to_save = []
+        
+        for category in categories:
+            await asyncio.sleep(random.uniform(1.5, 3.5))
+            
+            url = f"https://rocketjobs.pl/oferty-pracy/{slug}/{category}?radius=0&sortBy=newest"
+            status, html = await asyncio.to_thread(fetch_url_with_retry, url, "https://www.google.com/")
+            
+            if status != 200 or not html:
+                continue
 
-        for card in cards[:35]:
-            try:
-                title_el = card.select_one(".g-job-item__offer-title h3 a.g-button") or card.select_one(".g-job-item__offer-title a")
-                if not title_el:
-                    continue
+            soup = BeautifulSoup(html, "html.parser")
+            
+            links = soup.select("a.offer-card")
+            if not links:
+                continue
 
-                title_span = title_el.select_one("span.g-button__text")
-                title = strip_html(title_span.get_text(strip=True) if title_span else title_el.get_text(strip=True))
-                if not title or len(title) < 3:
-                    continue
-
-                link = title_el.get("href", "").strip()
-                if not link:
-                    continue
-                if not link.startswith("http"):
-                    link = "https://www.gowork.pl" + link
-                link = link.split("?")[0].split("#")[0]
-
-                ext_id = hashlib.md5(f"gowork_{link}".encode()).hexdigest()
-
-                async with lock:
-                    if ext_id in existing_ids:
+            for a in links:
+                try:
+                    card = a.find_parent("li")
+                    if not card:
                         continue
-                    existing_ids.add(ext_id)
 
-                job_city = city
-                loc_el = card.select_one(".g-job-location")
-                if loc_el:
-                    loc_text = loc_el.get_text(" ", strip=True)
-                    if len(loc_text) > 2:
-                        job_city = strip_html(loc_text)
+                    title_el = card.select_one("a.offer_list_offer_title_link") or card.select_one("h3 a")
+                    if not title_el:
+                        continue
+                    title = strip_html(title_el.get_text(strip=True))
+                    if not title or len(title) < 3:
+                        continue
 
-                if not city_matches(job_city, city):
-                    continue
+                    link = title_el.get("href", "").strip()
+                    if not link:
+                        continue
+                    if not link.startswith("http"):
+                        link = "https://rocketjobs.pl" + link
+                    link = link.split("?")[0].split("#")[0]
 
-                tag_els = card.select(".g-job-item-content__tag")
-                tags = [strip_html(t.get_text(" ", strip=True)) for t in tag_els]
+                    ext_id = hashlib.md5(f"rocketjobs_{link}".encode()).hexdigest()
 
-                salary = None
-                umowa_val = None
-                etat_val = None
+                    async with lock:
+                        if ext_id in existing_ids:
+                            continue
+                        existing_ids.add(ext_id)
 
-                for t in tags:
-                    t_lower = t.lower()
-                    if "zł" in t_lower or "pln" in t_lower or "eur" in t_lower:
-                        salary = t
-                    elif any(k in t_lower for k in ["umowa", "b2b", "staż", "staz", "dzieło", "zlecenie"]):
-                        umowa_val = t
-                    elif any(k in t_lower for k in ["etat", "part", "full", "niepełny", "pełny"]):
-                        etat_val = t
+                    job_city = city
+                    loc_el = card.select_one("[class*='vvropy'], [class*='gtp4go']")
+                    if loc_el:
+                        loc_text = strip_html(loc_el.get_text(" ", strip=True))
+                        if loc_text:
+                            job_city = loc_text.split()[0].replace(",", "").strip()
 
-                umowa_key = normalize_umowa(umowa_val) if umowa_val else normalize_umowa(title)
-                etat_key = normalize_etat(etat_val, salary) if etat_val else normalize_etat(title, salary)
+                    if not city_matches(job_city, city):
+                        continue
 
-                jobs_to_save.append({
-                    "external_id": ext_id,
-                    "title": title,
-                    "city": job_city,
-                    "salary": salary,
-                    "url": link,
-                    "source": "GoWork.pl",
-                    "umowa": umowa_key,
-                    "etat": etat_key
-                })
-            except Exception as e:
-                logger.debug(f"GoWork item parse error: {e}")
+                    sal_el = card.select_one("div[class*='eu2yrd']")
+                    salary = None
+                    if sal_el:
+                        salary_text = strip_html(sal_el.get_text(" ", strip=True))
+                        if salary_text and ("zł" in salary_text.lower() or "pln" in salary_text.lower()):
+                            salary = salary_text
+
+                    combined_text = card.get_text(" ", strip=True)
+
+                    jobs_to_save.append({
+                        "external_id": ext_id,
+                        "title": title,
+                        "city": job_city,
+                        "salary": salary,
+                        "url": link,
+                        "source": "RocketJobs",
+                        "umowa": normalize_umowa(combined_text),
+                        "etat": normalize_etat(combined_text, salary)
+                    })
+                except Exception as e:
+                    logger.debug(f"RocketJobs card sub-parse error: {e}")
 
         saved = await db_insert_jobs_batch(jobs_to_save)
-        logger.info(f"GoWork saved={saved} city={city}")
+        if saved > 0:
+            logger.info(f"RocketJobs saved={saved} city={city}")
         return saved
     except Exception as e:
-        logger.error(f"parse_gowork({city}) error: {e}")
+        logger.error(f"parse_rocketjobs({city}) error: {e}")
         return 0
 
 
@@ -514,7 +498,7 @@ async def scrape_city_task(city: str, existing_ids: set, semaphore: asyncio.Sema
         results = await asyncio.gather(
             parse_olx(city, existing_ids, lock),
             parse_praca_pl(city, existing_ids, lock),
-            parse_gowork(city, existing_ids, lock)
+            parse_rocketjobs(city, existing_ids, lock)
         )
         return sum(results)
 
