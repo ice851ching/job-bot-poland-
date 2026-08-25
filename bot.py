@@ -130,7 +130,7 @@ UMOWY = [
     ("Umowa zlecenie", "umowa_zlecenie"),
     ("Umowa o dzieło", "umowa_o_dzielo"),
     ("B2B", "b2b"),
-    ("Staż / Praktyki", "staz"),
+    ("Staż /  Praktyki", "staz"),
 ]
 
 UMOWY_DISPLAY = {
@@ -138,7 +138,7 @@ UMOWY_DISPLAY = {
     "umowa_zlecenie": "Umowa zlecenie",
     "umowa_o_dzielo": "Umowa o dzieło",
     "b2b": "B2B",
-    "staz": "Staż / Praktyki",
+    "staz": "Staż / Практики",
 }
 
 ETAT_DISPLAY = {
@@ -150,10 +150,8 @@ TEXTS = {
     "ru": {
         "welcome": (
             "👋 Привет! Я помогу найти работу в Польше.\n\n"
-            "📊 Нас уже <b>{total}</b> человек в базе, "
-            "из них <b>{active}</b> активно ищут работу прямо сейчас!\n\n"
             "Буду присылать свежие вакансии по мере их появления "
-            "с OLX и Praca.pl.\n\n"
+            "с OLX, Praca.pl и GoWork.\n\n"
             "Выбери язык:"
         ),
         "choose_city": "🏙 Выбери город:",
@@ -212,9 +210,7 @@ TEXTS = {
     "pl": {
         "welcome": (
             "👋 Cześć! Pomogę znaleźć pracę w Polsce.\n\n"
-            "📊 Mamy już <b>{total}</b> osób w bazie, "
-            "z czego <b>{active}</b> aktywnie szuka pracy!\n\n"
-            "Będę wysyłać nowe oferty na bieżąco z OLX i Praca.pl.\n\n"
+            "Będę wysyłać nowe oferty na bieżąco z OLX, Praca.pl i GoWork.\n\n"
             "Wybierz język:"
         ),
         "choose_city": "🏙 Wybierz miasto:",
@@ -228,7 +224,7 @@ TEXTS = {
             "📋 Umowa: {umowa}\n\n"
             "🔍 Szukam ofert na OLX, Praca.pl i GoWork..."
         ),
-        "loading_city": "🔍 Szukam nowych ofert dla tego miasta...\nPoczekaj 30–60 секунд.",
+        "loading_city": "🔍 Szukam nowych ofert dla tego miasta...\nPoczekaj 30–60 sekund.",
         "no_jobs": "😔 Brak ofert. Sprawdzam co 15 min!",
         "menu_active": "🟢 Bot działa i szuka ofert. Przyciski poniżej 👇",
         "stop_donate": (
@@ -264,9 +260,7 @@ TEXTS = {
     "ua": {
         "welcome": (
             "👋 Привіт! Допоможу знайти роботу в Польщі.\n\n"
-            "📊 Нас вже <b>{total}</b> людей у базі, "
-            "з них <b>{active}</b> активно шукають роботу!\n\n"
-            "Бот надсилатиме нові вакансії з OLX та Praca.pl.\n\n"
+            "Бот надсилатиме нові вакансії з OLX, Praca.pl та GoWork.\n\n"
             "Обери мову:"
         ),
         "choose_city": "🏙 Обери місто:",
@@ -732,7 +726,7 @@ def format_job(job):
 
 async def send_promo(chat_id):
     try:
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚀 Начать работу курьером", url=REF_LINK)]])
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚀 Начать", url=REF_LINK)]])
         sent_msg = await bot.send_message(chat_id, PROMO_TEXT, reply_markup=kb, parse_mode="HTML")
         try:
             await bot.pin_chat_message(chat_id=chat_id, message_id=sent_msg.message_id, disable_notification=True)
