@@ -397,8 +397,7 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
 
 async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
     """
-    Полированный, сверхстабильный парсер RocketJobs.pl по целевым категориям.
-    Парсит: support, gastronomia, praca-w-sklepie с эмуляцией пауз между ними.
+    Устойчивый парсер RocketJobs.pl с расширенными логами и поиском по href.
     """
     try:
         slug = get_city_slug(city)
@@ -408,35 +407,34 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
         categories = ["support", "gastronomia", "praca-w-sklepie"]
         jobs_to_save = []
         
+        logger.info(f"🚀 [RocketJobs] Starting scan for {city} (slug: {slug})...")
+
         for category in categories:
-            await asyncio.sleep(random.uniform(1.5, 3.5))
+            await asyncio.sleep(random.uniform(1.0, 2.5))
             
             url = f"https://rocketjobs.pl/oferty-pracy/{slug}/{category}?radius=0&sortBy=newest"
             status, html = await asyncio.to_thread(fetch_url_with_retry, url, "https://www.google.com/")
             
             if status != 200 or not html:
+                logger.warning(f"⚠️ [RocketJobs] HTTP status {status} for {city}/{category}")
                 continue
 
             soup = BeautifulSoup(html, "html.parser")
             
-            links = soup.select("a.offer-card")
+            # Поиск всех карточек через гибкие селекторы по ссылке
+            links = soup.select("a[href*='/oferta/']") or soup.select("a[href*='/job/']")
+            logger.info(f"🔍 [RocketJobs] DEBUG: status={status}, links_found={len(links)} for {city}/{category}")
+
             if not links:
                 continue
 
             for a in links:
                 try:
-                    card = a.find_parent("li")
-                    if not card:
-                        continue
-
-                    title_el = card.select_one("a.offer_list_offer_title_link") or card.select_one("h3 a")
-                    if not title_el:
-                        continue
-                    title = strip_html(title_el.get_text(strip=True))
+                    title = strip_html(a.get_text(strip=True))
                     if not title or len(title) < 3:
                         continue
 
-                    link = title_el.get("href", "").strip()
+                    link = a.get("href", "").strip()
                     if not link:
                         continue
                     if not link.startswith("http"):
@@ -450,44 +448,26 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                             continue
                         existing_ids.add(ext_id)
 
-                    job_city = city
-                    loc_el = card.select_one("[class*='vvropy'], [class*='gtp4go']")
-                    if loc_el:
-                        loc_text = strip_html(loc_el.get_text(" ", strip=True))
-                        if loc_text:
-                            job_city = loc_text.split()[0].replace(",", "").strip()
-
-                    if not city_matches(job_city, city):
-                        continue
-
-                    sal_el = card.select_one("div[class*='eu2yrd']")
-                    salary = None
-                    if sal_el:
-                        salary_text = strip_html(sal_el.get_text(" ", strip=True))
-                        if salary_text and ("zł" in salary_text.lower() or "pln" in salary_text.lower()):
-                            salary = salary_text
-
-                    combined_text = card.get_text(" ", strip=True)
+                    card_text = a.parent.get_text(" ", strip=True) if a.parent else title
 
                     jobs_to_save.append({
                         "external_id": ext_id,
                         "title": title,
-                        "city": job_city,
-                        "salary": salary,
+                        "city": city,
+                        "salary": None,
                         "url": link,
                         "source": "RocketJobs",
-                        "umowa": normalize_umowa(combined_text),
-                        "etat": normalize_etat(combined_text, salary)
+                        "umowa": normalize_umowa(card_text),
+                        "etat": normalize_etat(card_text)
                     })
                 except Exception as e:
                     logger.debug(f"RocketJobs card sub-parse error: {e}")
 
         saved = await db_insert_jobs_batch(jobs_to_save)
-        if saved > 0:
-            logger.info(f"RocketJobs saved={saved} city={city}")
+        logger.info(f"🚀 [RocketJobs] Saved={saved} jobs for {city}")
         return saved
     except Exception as e:
-        logger.error(f"parse_rocketjobs({city}) error: {e}")
+        logger.error(f"❌ parse_rocketjobs({city}) error: {e}")
         return 0
 
 
