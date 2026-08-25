@@ -150,8 +150,10 @@ TEXTS = {
     "ru": {
         "welcome": (
             "👋 Привет! Я помогу найти работу в Польше.\n\n"
+            "📊 Нас уже <b>{total}</b> человек в базе, "
+            "из них <b>{active}</b> активно ищут работу прямо сейчас!\n\n"
             "Буду присылать свежие вакансии по мере их появления "
-            "с OLX, Praca.pl и GoWork.\n\n"
+            "с OLX и Praca.pl.\n\n"
             "Выбери язык:"
         ),
         "choose_city": "🏙 Выбери город:",
@@ -210,7 +212,9 @@ TEXTS = {
     "pl": {
         "welcome": (
             "👋 Cześć! Pomogę znaleźć pracę w Polsce.\n\n"
-            "Będę wysyłać nowe oferty na bieżąco z OLX, Praca.pl i GoWork.\n\n"
+            "📊 Mamy już <b>{total}</b> osób w bazie, "
+            "z czego <b>{active}</b> aktywnie szuka pracy!\n\n"
+            "Będę wysyłać nowe oferty na bieżąco z OLX i Praca.pl.\n\n"
             "Wybierz język:"
         ),
         "choose_city": "🏙 Wybierz miasto:",
@@ -224,7 +228,7 @@ TEXTS = {
             "📋 Umowa: {umowa}\n\n"
             "🔍 Szukam ofert na OLX, Praca.pl i GoWork..."
         ),
-        "loading_city": "🔍 Szukam nowych ofert dla tego miasta...\nPoczekaj 30–60 sekund.",
+        "loading_city": "🔍 Szukam nowych ofert dla tego miasta...\nPoczekaj 30–60 секунд.",
         "no_jobs": "😔 Brak ofert. Sprawdzam co 15 min!",
         "menu_active": "🟢 Bot działa i szuka ofert. Przyciski poniżej 👇",
         "stop_donate": (
@@ -260,7 +264,9 @@ TEXTS = {
     "ua": {
         "welcome": (
             "👋 Привіт! Допоможу знайти роботу в Польщі.\n\n"
-            "Бот надсилатиме нові вакансії з OLX, Praca.pl та GoWork.\n\n"
+            "📊 Нас вже <b>{total}</b> людей у базі, "
+            "з них <b>{active}</b> активно шукають роботу!\n\n"
+            "Бот надсилатиме нові вакансії з OLX та Praca.pl.\n\n"
             "Обери мову:"
         ),
         "choose_city": "🏙 Обери місто:",
@@ -630,6 +636,25 @@ def db_get_jobs_for_city(city, limit=150, hours=24):
             logger.error(f"db_get_jobs_for_city error: {e}")
             return []
     return []
+
+
+def db_get_bot_stats() -> dict:
+    """
+    Возвращает реальную статистику бота из Supabase.
+    total = все зарегистрированные за всё время
+    active = те, кто не заблокировал бота (is_active = true)
+    """
+    try:
+        total_res = supabase.table("users").select("telegram_id", count="exact").limit(1).execute()
+        active_res = supabase.table("users").select("telegram_id", count="exact").eq("is_active", True).limit(1).execute()
+        
+        total = total_res.count if total_res.count is not None else 0
+        active = active_res.count if active_res.count is not None else 0
+        
+        return {"total": total, "active": active}
+    except Exception as e:
+        logger.error(f"db_get_bot_stats error: {e}")
+        return {"total": 0, "active": 0}
 
 
 # ==================== GITHUB TRIGGER ====================
