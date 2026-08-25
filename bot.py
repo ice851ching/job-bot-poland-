@@ -130,7 +130,7 @@ UMOWY = [
     ("Umowa zlecenie", "umowa_zlecenie"),
     ("Umowa o dzieło", "umowa_o_dzielo"),
     ("B2B", "b2b"),
-    ("Staż /  Praktyki", "staz"),
+    ("Staż / Praktyki", "staz"),
 ]
 
 UMOWY_DISPLAY = {
@@ -151,7 +151,7 @@ TEXTS = {
         "welcome": (
             "👋 Привет! Я помогу найти работу в Польше.\n\n"
             "Буду присылать свежие вакансии по мере их появления "
-            "с OLX, Praca.pl и GoWork.\n\n"
+            "с OLX и Praca.pl.\n\n"
             "Выбери язык:"
         ),
         "choose_city": "🏙 Выбери город:",
@@ -210,7 +210,7 @@ TEXTS = {
     "pl": {
         "welcome": (
             "👋 Cześć! Pomogę znaleźć pracę w Polsce.\n\n"
-            "Będę wysyłać nowe oferty na bieżąco z OLX, Praca.pl i GoWork.\n\n"
+            "Będę wysyłać nowe oferty na bieżąco z OLX i Praca.pl.\n\n"
             "Wybierz język:"
         ),
         "choose_city": "🏙 Wybierz miasto:",
@@ -255,12 +255,12 @@ TEXTS = {
             "nowych ofert, potwierdź, że nadal szukasz pracy! 👇"
         ),
         "btn_continue": "🔄 Kontynuuj wyszukiwanie",
-        "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowe oferty już wkrótce! 🚀",
+        "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowе oferty już wkrótce! 🚀",
     },
     "ua": {
         "welcome": (
             "👋 Привіт! Допоможу знайти роботу в Польщі.\n\n"
-            "Бот надсилатиме нові вакансії з OLX, Praca.pl та GoWork.\n\n"
+            "Бот надсилатиме нові вакансії з OLX та Praca.pl.\n\n"
             "Обери мову:"
         ),
         "choose_city": "🏙 Обери місто:",
@@ -921,6 +921,54 @@ async def run_broadcast(bot: Bot, admin_id: int, from_chat_id: int, message_id: 
         pass
 
 
+# ==================== VIP AUTOMATIC GITHUB TRIGGER ====================
+
+async def auto_trigger_github_scraper():
+    """
+    Каждые 25 минут пинает GitHub через VIP API для мгновенного и точного парсинга по расписанию.
+    """
+    if is_night_time():
+        logger.info("🌙 Night time — skipping auto-trigger of GitHub Scraper.")
+        return
+        
+    logger.info("🚀 Triggering scheduled instant scrape via GitHub API...")
+    # Передаем пустую строку, чтобы запустить ПОЛНЫЙ сбор по всем активным городам!
+    ok = await trigger_scraper_for_city("")
+    if ok:
+        logger.info("✅ GitHub Scraper successfully triggered via VIP API!")
+    else:
+        logger.warning("⚠️ Failed to trigger GitHub Scraper via API.")
+
+
+# ==================== AUTOMATIC BOT DESCRIPTION UPDATE ====================
+
+async def update_bot_description():
+    """
+    Раз в час обновляет описание бота (Short Description / What can this bot do?) в Telegram,
+    подставляя реальную статистику базы данных. Картинки/медиа при этом не затрагиваются.
+    """
+    try:
+        stats = await asyncio.to_thread(db_get_bot_stats)
+        total = stats["total"]
+        active = stats["active"]
+        
+        description_text = (
+            "Зачем пахать над поиском работы, чилль на диване "
+            "пока твой цифровой раб пылесосит вакансии 24/7\n\n"
+            f"👥 Всего: {total} / 🟢 Активных: {active}"
+        )
+        
+        # Обновляем описание для дефолтного и основных языковых кодов
+        await bot.set_my_description(description=description_text)
+        await bot.set_my_description(description=description_text, language_code="ru")
+        await bot.set_my_description(description=description_text, language_code="pl")
+        await bot.set_my_description(description=description_text, language_code="uk")
+        
+        logger.info(f"✅ Bot Description updated: {total} total / {active} active")
+    except Exception as e:
+        logger.error(f"Failed to update bot description: {e}")
+
+
 # ==================== HANDLERS ====================
 
 @router.message(Command("admin"), F.from_user.id == ADMIN_ID)
@@ -1185,25 +1233,6 @@ async def on_renew_search(c: CallbackQuery):
         logger.warning(f"on_renew_search error: {e}")
 
 
-# ==================== VIP AUTOMATIC GITHUB TRIGGER ====================
-
-async def auto_trigger_github_scraper():
-    """
-    Каждые 25 минут пинает GitHub через VIP API для мгновенного и точного парсинга по расписанию.
-    """
-    if is_night_time():
-        logger.info("🌙 Night time — skipping auto-trigger of GitHub Scraper.")
-        return
-        
-    logger.info("🚀 Triggering scheduled instant scrape via GitHub API...")
-    # Передаем пустую строку, чтобы запустить ПОЛНЫЙ сбор по всем активным городам!
-    ok = await trigger_scraper_for_city("")
-    if ok:
-        logger.info("✅ GitHub Scraper successfully triggered via VIP API!")
-    else:
-        logger.warning("⚠️ Failed to trigger GitHub Scraper via API.")
-
-
 # ==================== SCHEDULER (НЕБЛОКИРУЮЩИЙ) ====================
 
 async def scheduled_check():
@@ -1395,6 +1424,19 @@ async def main():
         coalesce=True,
         misfire_grace_time=300,
         next_run_time=datetime.now(timezone.utc) + timedelta(seconds=20),
+    )
+    
+    # 3. Автоматическое обновление описания бота (Каждый час)
+    s.add_job(
+        update_bot_description,
+        "interval",
+        hours=1,
+        id="update_description",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=15),
     )
     
     s.start()
