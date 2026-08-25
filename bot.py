@@ -942,19 +942,22 @@ async def auto_trigger_github_scraper():
 
 # ==================== AUTOMATIC BOT DESCRIPTION UPDATE ====================
 
+# ==================== AUTOMATIC BOT DESCRIPTION UPDATE ====================
+
 async def update_bot_description():
     """
-    Раз в час обновляет описание бота (Short Description / What can this bot do?) в Telegram,
-    подставляя реальную статистику базы данных. Картинки/медиа при этом не затрагиваются.
+    Раз в час обновляет описание бота (What can this bot do?) в Telegram,
+    подставляя реальную статистику базы данных.
     """
     try:
         stats = await asyncio.to_thread(db_get_bot_stats)
         total = stats["total"]
         active = stats["active"]
         
+        # Сделали ровно 1 перенос строки (\n), чтобы статистика была вплотную к тексту
         description_text = (
             "Зачем пахать над поиском работы, чилль на диване "
-            "пока твой цифровой раб пылесосит вакансии 24/7\n\n"
+            "пока твой цифровой раб пылесосит вакансии 24/7\n"
             f"👥 Всего: {total} / 🟢 Активных: {active}"
         )
         
