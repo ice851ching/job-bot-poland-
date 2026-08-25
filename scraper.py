@@ -321,6 +321,7 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
         url = f"https://www.praca.pl/m-{slug}.html?m={city}"
         status, html = await asyncio.to_thread(fetch_url_with_retry, url, "https://www.google.com/")
         if status != 200 or not html:
+            logger.warning(f"Praca.pl returned status {status} for {city}")
             return 0
 
         soup = BeautifulSoup(html, "html.parser")
@@ -396,8 +397,9 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
 
 async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
     """
-    Неубиваемый парсер RocketJobs.pl.
-    Завязан на data-index (виртуализация списка) и парсит чистый текст без привязки к динамическим MUI-классам.
+    Абсолютно неубиваемый парсер RocketJobs.pl.
+    Ищет карточки по тегу a.offer-card и парсит город через иконку map-pin, а зарплату через Regex.
+    Полная независимость от динамических MUI-классов!
     """
     try:
         slug = get_city_slug(city)
@@ -407,9 +409,11 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
         categories = ["support", "gastronomia", "praca-w-sklepie"]
         jobs_to_save = []
         total_found = 0
+        already_in_db = 0
+        parse_errors = 0
 
         for category in categories:
-            await asyncio.sleep(random.uniform(1.0, 2.5))
+            await asyncio.sleep(random.uniform(1.5, 3.5))
             
             url = f"https://rocketjobs.pl/oferty-pracy/{slug}/{category}?radius=0&sortBy=newest"
             status, html = await asyncio.to_thread(fetch_url_with_retry, url, "https://www.google.com/")
@@ -419,56 +423,79 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
 
             soup = BeautifulSoup(html, "html.parser")
             
-            # Ищем карточки по неубиваемому data-index
-            cards = soup.select("li[data-index]")
-            if not cards:
-                # Запасной вариант: берем родительские li у ссылок
-                cards = [a.find_parent("li") for a in soup.select("a[href*='/oferta-pracy/']") if a.find_parent("li")]
+            # Находим карточки по стабильному семантическому классу a.offer-card
+            offer_links = soup.select("a.offer-card")
+            total_found += len(offer_links)
 
-            total_found += len(cards)
-
-            for card in cards:
+            for a in offer_links:
                 try:
-                    # Поиск ссылки на вакансию
-                    link_el = card.select_one("h3 a") or card.select_one("a.offer_list_offer_title_link") or card.select_one("a[href*='/oferta-pracy/']")
-                    if not link_el:
+                    # Поднимаемся до родительского контейнера li
+                    card = a.find_parent("li")
+                    if not card:
+                        parse_errors += 1
                         continue
 
-                    link = link_el.get("href", "").strip()
+                    # 1. Заголовок
+                    title_el = card.select_one("a.offer_list_offer_title_link") or card.select_one("h3 a")
+                    if not title_el:
+                        parse_errors += 1
+                        continue
+                    
+                    title = strip_html(title_el.get_text(strip=True))
+                    if not title:
+                        title = a.get("title", "").replace("Zobacz ofertę", "").strip()
+
+                    if not title or len(title) < 3:
+                        parse_errors += 1
+                        continue
+
+                    # 2. Ссылка
+                    link = title_el.get("href", "").strip()
                     if not link:
+                        link = a.get("href", "").strip()
+                    if not link:
+                        parse_errors += 1
                         continue
                     if not link.startswith("http"):
                         link = "https://rocketjobs.pl" + link
                     link = link.split("?")[0].split("#")[0]
 
-                    # Заголовок
-                    title = strip_html(link_el.get_text(strip=True))
-                    if not title:
-                        title = link_el.get("title", "").replace("Zobacz ofertę", "").strip()
-                    
-                    if not title or len(title) < 3:
-                        continue
-
                     ext_id = hashlib.md5(f"rocketjobs_{link}".encode()).hexdigest()
+                    
                     async with lock:
                         if ext_id in existing_ids:
+                            already_in_db += 1
                             continue
                         existing_ids.add(ext_id)
 
-                    card_full_text = card.get_text(" ", strip=True)
+                    # 3. Извлекаем город через иконку svg.lucide-map-pin (неубиваемый семантический путь!)
+                    job_city = city
+                    pin_icon = card.select_one("svg.lucide-map-pin")
+                    if pin_icon:
+                        # Поднимаемся до контейнера (Box или Stack), держащего иконку и город
+                        container = pin_icon.find_parent(class_=re.compile(r"MuiStack|MuiBox|mui-"))
+                        if container:
+                            loc_text = strip_html(container.get_text(" ", strip=True))
+                            if loc_text:
+                                # Очищаем "Toruń , +4 Lokalizacje" -> "Toruń"
+                                job_city = loc_text.split(",")[0].split()[0].replace(",", "").strip()
 
-                    # Извлечение зарплаты без завязки на динамические MUI-хеши
+                    if not city_matches(job_city, city):
+                        continue
+
+                    # 4. Извлекаем зарплату через Regex (находим цифры + PLN/zł/EUR, игнорируя mui-хеш классы)
+                    card_full_text = card.get_text(" ", strip=True)
                     salary = None
                     if "nieujawnione" not in card_full_text.lower():
-                        # Ищем шаблоны вида: "3 500 - 10 500 PLN/mies." или "6 000 - 8 000 zł"
-                        sal_match = re.search(r"(\d[\d\s]*\s*(?:-|–|до)?\s*\d[\d\s]*\s*(?:PLN|zł|EUR)(?:/[a-zA-Zа-яА-Я.]+)*)", card_full_text, re.IGNORECASE)
+                        # Ищет одиночные суммы и диапазоны типа: "3 500 - 10 500 PLN/mies." или "6 000 zł"
+                        sal_match = re.search(r"(\d[\d\s]*(?:\s*[-–]\s*\d[\d\s]*)?\s*(?:PLN|zł|EUR)(?:/[a-zA-Zа-яА-Я]+)*)", card_full_text, re.IGNORECASE)
                         if sal_match:
                             salary = strip_html(sal_match.group(0))
 
                     jobs_to_save.append({
                         "external_id": ext_id,
                         "title": title,
-                        "city": city,
+                        "city": job_city,
                         "salary": salary,
                         "url": link,
                         "source": "RocketJobs",
@@ -476,10 +503,13 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                         "etat": normalize_etat(card_full_text, salary) or normalize_etat(title, salary)
                     })
                 except Exception as e:
+                    parse_errors += 1
                     logger.debug(f"RocketJobs card parse error: {e}")
 
         saved = await db_insert_jobs_batch(jobs_to_save)
-        logger.info(f"RocketJobs saved={saved} (found {total_found} offers) city={city}")
+        logger.info(
+            f"RocketJobs saved={saved} (found={total_found}, in_db={already_in_db}, errors={parse_errors}) city={city}"
+        )
         return saved
     except Exception as e:
         logger.error(f"parse_rocketjobs({city}) error: {e}")
