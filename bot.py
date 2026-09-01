@@ -138,7 +138,7 @@ UMOWY_DISPLAY = {
     "umowa_zlecenie": "Umowa zlecenie",
     "umowa_o_dzielo": "Umowa o dzieło",
     "b2b": "B2B",
-    "staz": "Staż / Практики",
+    "staz": "Staż / Praktyki",
 }
 
 ETAT_DISPLAY = {
@@ -151,7 +151,7 @@ TEXTS = {
         "welcome": (
             "👋 Привет! Я помогу найти работу в Польше.\n\n"
             "Буду присылать свежие вакансии по мере их появления "
-            "с OLX, Praca.pl и RocketJobs\n\n"
+            "с OLX, Praca.pl и RocketJobs.\n\n"
             "Выбери язык:"
         ),
         "choose_city": "🏙 Выбери город:",
@@ -163,7 +163,7 @@ TEXTS = {
             "🏙 Город: {city}\n"
             "⏰ Занятость: {etat}\n"
             "📋 Договор: {umowa}\n\n"
-            "🔍 Ищу свежие вакансии на OLX, Praca.pl и Rocket Jobs..."
+            "🔍 Ищу свежие вакансии на OLX, Praca.pl и RocketJobs..."
         ),
         "loading_city": (
             "🔍 По этому городу собираю свежие вакансии...\n"
@@ -183,7 +183,7 @@ TEXTS = {
         "help": (
             "🤖 <b>Что умеет бот:</b>\n\n"
             "Агрегирует публично доступные вакансии "
-            "с OLX, Praca.pl и GoWork и присылает их тебе.\n\n"
+            "с OLX, Praca.pl и RocketJobs и присылает их тебе.\n\n"
             "<b>Управление:</b>\n"
             f"<b>{BTN_RESET}</b> — настроить фильтры заново\n"
             f"<b>{BTN_STOP}</b> — остановить рассылку\n"
@@ -197,7 +197,7 @@ TEXTS = {
         "after_initial": (
             "👆 Это были последние актуальные вакансии за сегодня.\n\n"
             "🔄 Теперь бот будет присылать только новые вакансии "
-            "по мере их появления на OLX, Praca.pl и GoWork."
+            "по мере их появления на OLX, Praca.pl и RocketJobs."
         ),
         "search_paused": (
             "⏸ <b>Поиск временно приостановлен</b>\n\n"
@@ -210,7 +210,7 @@ TEXTS = {
     "pl": {
         "welcome": (
             "👋 Cześć! Pomogę znaleźć pracę w Polsce.\n\n"
-            "Będę wysyłać nowe oferty na bieżąco z OLX i Praca.pl.\n\n"
+            "Będę wysyłać nowe oferty na bieżąco z OLX, Praca.pl i RocketJobs.\n\n"
             "Wybierz język:"
         ),
         "choose_city": "🏙 Wybierz miasto:",
@@ -222,9 +222,9 @@ TEXTS = {
             "🏙 Miasto: {city}\n"
             "⏰ Etat: {etat}\n"
             "📋 Umowa: {umowa}\n\n"
-            "🔍 Szukam ofert na OLX, Praca.pl i GoWork..."
+            "🔍 Szukam ofert na OLX, Praca.pl i RocketJobs..."
         ),
-        "loading_city": "🔍 Szukam nowych ofert dla tego miasta...\nPoczekaj 30–60 sekund.",
+        "loading_city": "🔍 Szukam nowych ofert dla tego miasta...\nPoczekaj 30–60 секунд.",
         "no_jobs": "😔 Brak ofert. Sprawdzam co 15 min!",
         "menu_active": "🟢 Bot działa i szuka ofert. Przyciski poniżej 👇",
         "stop_donate": (
@@ -235,7 +235,7 @@ TEXTS = {
         "reset_msg": "🔄 Zresetowano! Zaczynamy od nowа.\n\nWybierz język:",
         "help": (
             "🤖 <b>Co robi bot:</b>\n\n"
-            "Agreguje oferty pracy z OLX, Praca.pl i GoWork.\n\n"
+            "Agreguje oferty pracy z OLX, Praca.pl i RocketJobs.\n\n"
             f"<b>{BTN_RESET}</b> — ustaw filtry od nowa\n"
             f"<b>{BTN_STOP}</b> — zatrzymaj wysyłkę\n"
             f"<b>{BTN_HELP}</b> — ta pomoc\n\n"
@@ -255,12 +255,12 @@ TEXTS = {
             "nowych ofert, potwierdź, że nadal szukasz pracy! 👇"
         ),
         "btn_continue": "🔄 Kontynuuj wyszukiwanie",
-        "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowе oferty już wkrótce! 🚀",
+        "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowe oferty już wkrótce! 🚀",
     },
     "ua": {
         "welcome": (
             "👋 Привіт! Допоможу знайти роботу в Польщі.\n\n"
-            "Бот надсилатиме нові вакансії з OLX та Praca.pl.\n\n"
+            "Бот надсилатиме нові вакансії з OLX, Praca.pl та RocketJobs.\n\n"
             "Обери мову:"
         ),
         "choose_city": "🏙 Обери місто:",
@@ -272,7 +272,7 @@ TEXTS = {
             "🏙 Місто: {city}\n"
             "⏰ Зайнятість: {etat}\n"
             "📋 Договір: {umowa}\n\n"
-            "🔍 Шукаю вакансії на OLX, Praca.pl та GoWork..."
+            "🔍 Шукаю вакансії на OLX, Praca.pl та RocketJobs..."
         ),
         "loading_city": "🔍 Шукаю свіжі вакансії для этого міста...\nЗачекай 30–60 секунд.",
         "no_jobs": "😔 Немає вакансій. Перевірю через 15 хв!",
@@ -285,7 +285,7 @@ TEXTS = {
         "reset_msg": "🔄 Скинуто! Починаємо заново.\n\nОбери мову:",
         "help": (
             "🤖 <b>Що вміє бот:</b>\n\n"
-            "Агрегує публічні вакансії з OLX, Praca.pl та GoWork.\n\n"
+            "Агрегує публічні вакансії з OLX, Praca.pl та RocketJobs.\n\n"
             f"<b>{BTN_RESET}</b> — налаштувати фільтри заново\n"
             f"<b>{BTN_STOP}</b> — зупинити розсилку\n"
             f"<b>{BTN_HELP}</b> — ця довідка\n\n"
@@ -453,7 +453,7 @@ def parse_iso_datetime(dt_str: str) -> datetime:
         return datetime.min.replace(tzinfo=timezone.utc)
 
 
-# ==================== DATABASE ====================
+# ==================== DATABASE (FAIL-SAFE + FULL RETRY) ====================
 
 def db_upsert_user(tid, username=None):
     try:
@@ -534,23 +534,26 @@ def db_get_all_active_users():
 
 
 def db_get_sent_job_ids(tid) -> set:
-    """С повторной попыткой при ошибке [Errno 11] Resource temporarily unavailable"""
+    """
+    Бронебойный запрос истории отправки.
+    Повторяет при любых сбоях сети. Если база не ответила — возвращает None (Fail-Safe),
+    чтобы бот пропустил юзера и ни в коем случае не слал дубликаты!
+    """
     for attempt in range(3):
         try:
             r = supabase.table("sent_jobs").select("job_id").eq("telegram_id", tid).execute()
             return {row["job_id"] for row in r.data} if r.data else set()
         except Exception as e:
-            err_text = str(e)
-            if ("errno 11" in err_text.lower() or "temporarily unavailable" in err_text.lower()) and attempt < 2:
+            if attempt < 2:
                 time.sleep(0.5 * (attempt + 1))
                 continue
-            logger.error(f"db_get_sent_job_ids error for {tid}: {e}")
-            return set()
-    return set()
+            logger.error(f"❌ db_get_sent_job_ids failed for {tid} after 3 attempts: {e}")
+            return None  # Предохранитель: возвращаем None вместо пустого сета!
+    return None
 
 
 def db_mark_sent_batch(tid, job_ids: list) -> bool:
-    """С повторной попыткой при ошибке [Errno 11] Resource temporarily unavailable"""
+    """Пакетная фиксация с автоповтором на любые сетевые ошибки"""
     if not job_ids:
         return True
     for attempt in range(3):
@@ -563,11 +566,10 @@ def db_mark_sent_batch(tid, job_ids: list) -> bool:
             ).execute()
             return True
         except Exception as e:
-            err_text = str(e)
-            if ("errno 11" in err_text.lower() or "temporarily unavailable" in err_text.lower()) and attempt < 2:
+            if attempt < 2:
                 time.sleep(0.5 * (attempt + 1))
                 continue
-            logger.error(f"db_mark_sent_batch error for {tid}: {e}")
+            logger.error(f"❌ db_mark_sent_batch error for {tid}: {e}")
             return False
     return False
 
@@ -604,7 +606,7 @@ def db_pause_search_filter(tid):
 
 
 def db_get_jobs_for_city(city, limit=150, hours=24):
-    """С повторной попыткой при ошибке [Errno 11] Resource temporarily unavailable"""
+    """С автоповтором на любые сетевые ошибки"""
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     fields = "id, external_id, title, city, salary, url, source, umowa, etat, created_at"
     for attempt in range(3):
@@ -623,8 +625,7 @@ def db_get_jobs_for_city(city, limit=150, hours=24):
                 .execute()
             return r.data or []
         except Exception as e:
-            err_text = str(e)
-            if ("errno 11" in err_text.lower() or "temporarily unavailable" in err_text.lower()) and attempt < 2:
+            if attempt < 2:
                 time.sleep(0.3 * (attempt + 1))
                 continue
             logger.error(f"db_get_jobs_for_city error: {e}")
@@ -633,22 +634,23 @@ def db_get_jobs_for_city(city, limit=150, hours=24):
 
 
 def db_get_bot_stats() -> dict:
-    """
-    Возвращает реальную статистику бота из Supabase.
-    total = все зарегистрированные за всё время
-    active = те, кто не заблокировал бота (is_active = true)
-    """
-    try:
-        total_res = supabase.table("users").select("telegram_id", count="exact").limit(1).execute()
-        active_res = supabase.table("users").select("telegram_id", count="exact").eq("is_active", True).limit(1).execute()
-        
-        total = total_res.count if total_res.count is not None else 0
-        active = active_res.count if active_res.count is not None else 0
-        
-        return {"total": total, "active": active}
-    except Exception as e:
-        logger.error(f"db_get_bot_stats error: {e}")
-        return {"total": 0, "active": 0}
+    """Возвращает реальную статистику зарегистрированных и активных людей"""
+    for attempt in range(3):
+        try:
+            total_res = supabase.table("users").select("telegram_id", count="exact").limit(1).execute()
+            active_res = supabase.table("users").select("telegram_id", count="exact").eq("is_active", True).limit(1).execute()
+            
+            total = total_res.count if total_res.count is not None else 0
+            active = active_res.count if active_res.count is not None else 0
+            
+            return {"total": total, "active": active}
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(0.5)
+                continue
+            logger.error(f"db_get_bot_stats error: {e}")
+            return {"total": 0, "active": 0}
+    return {"total": 0, "active": 0}
 
 
 # ==================== GITHUB TRIGGER ====================
@@ -739,7 +741,15 @@ async def send_promo(chat_id):
 async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=False):
     async with get_user_lock(tid):
         sent, sf, ss, blocked = 0, 0, 0, 0
+        
+        # Получаем историю отправки с предохранителем
         already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, tid)
+        
+        # ЕСЛИ БЫЛ СБОЙ СЕТИ И БАЗА НЕ ОТВЕТИЛА — ПРОПУСКАЕМ ЮЗЕРА (НОЛЬ СПАМА ДУБЛЯМИ!)
+        if already_sent_ids is None:
+            logger.warning(f"⚠️ Skipping user {tid} in this cycle due to DB history fetch error.")
+            return 0
+
         sent_job_ids_batch = []
 
         for job in jobs:
@@ -924,15 +934,12 @@ async def run_broadcast(bot: Bot, admin_id: int, from_chat_id: int, message_id: 
 # ==================== VIP AUTOMATIC GITHUB TRIGGER ====================
 
 async def auto_trigger_github_scraper():
-    """
-    Каждые 25 минут пинает GitHub через VIP API для мгновенного и точного парсинга по расписанию.
-    """
+    """Каждые 25 минут пинает GitHub через VIP API для мгновенного парсинга"""
     if is_night_time():
         logger.info("🌙 Night time — skipping auto-trigger of GitHub Scraper.")
         return
         
     logger.info("🚀 Triggering scheduled instant scrape via GitHub API...")
-    # Передаем пустую строку, чтобы запустить ПОЛНЫЙ сбор по всем активным городам!
     ok = await trigger_scraper_for_city("")
     if ok:
         logger.info("✅ GitHub Scraper successfully triggered via VIP API!")
@@ -942,26 +949,22 @@ async def auto_trigger_github_scraper():
 
 # ==================== AUTOMATIC BOT DESCRIPTION UPDATE ====================
 
-# ==================== AUTOMATIC BOT DESCRIPTION UPDATE ====================
-
 async def update_bot_description():
-    """
-    Раз в час обновляет описание бота (What can this bot do?) в Telegram,
-    подставляя реальную статистику базы данных.
-    """
+    """Раз в час обновляет описание бота со свежей живой статистикой"""
     try:
         stats = await asyncio.to_thread(db_get_bot_stats)
-        total = stats["total"]
-        active = stats["active"]
+        total = stats.get("total", 0)
+        active = stats.get("active", 0)
         
-        # Сделали ровно 1 перенос строки (\n), чтобы статистика была вплотную к тексту
+        if total == 0:
+            return  # Защита от записи нулей при сбое базы
+            
         description_text = (
             "Зачем пахать над поиском работы, чилль на диване "
             "пока твой цифровой раб пылесосит вакансии 24/7\n"
             f"👥 Всего: {total} / 🟢 Активных: {active}"
         )
         
-        # Обновляем описание для дефолтного и основных языковых кодов
         await bot.set_my_description(description=description_text)
         await bot.set_my_description(description=description_text, language_code="ru")
         await bot.set_my_description(description=description_text, language_code="pl")
@@ -1403,7 +1406,7 @@ async def main():
 
     s = AsyncIOScheduler(timezone="UTC")
     
-    # 1. Задача регулярной проверки новых вакансий в БД (Каждые 15 минут)
+    # 1. Регулярная рассылка новых вакансий в чаты (Каждые 15 минут)
     s.add_job(
         scheduled_check,
         "interval",
@@ -1416,7 +1419,7 @@ async def main():
         next_run_time=datetime.now(timezone.utc) + timedelta(seconds=10),
     )
     
-    # 2. VIP-задача автоматического запуска парсера на GitHub (Каждые 25 минут секунда в секунду)
+    # 2. VIP запуск парсера на GitHub Actions (Каждые 25 минут)
     s.add_job(
         auto_trigger_github_scraper,
         "interval",
@@ -1429,7 +1432,7 @@ async def main():
         next_run_time=datetime.now(timezone.utc) + timedelta(seconds=20),
     )
     
-    # 3. Автоматическое обновление описания бота (Каждый час)
+    # 3. Автоматическое обновление описания и статистики бота (Каждый час)
     s.add_job(
         update_bot_description,
         "interval",
@@ -1439,12 +1442,12 @@ async def main():
         max_instances=1,
         coalesce=True,
         misfire_grace_time=300,
-        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=15),
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=30),
     )
     
     s.start()
 
-    logger.info("⏰ Scheduler started: first check in 10s, VIP scraper trigger in 20s, then regular intervals")
+    logger.info("⏰ Scheduler started: check in 10s, VIP scraper in 20s, description update in 30s")
 
     try:
         await dp.start_polling(bot)
