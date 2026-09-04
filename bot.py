@@ -122,6 +122,16 @@ CITY_SLUGS = {
     "kielce": "kielce", "gliwice": "gliwice",
     "zabrze": "zabrze", "olsztyn": "olsztyn", "opole": "opole",
     "zielona góra": "zielona-gora", "zielona gora": "zielona-gora",
+    "radom": "radom",
+}
+
+# ==================== КАРТА КАНАЛОВ ДЛЯ АВТОПОСТИНГА ====================
+CHANNELS_MAPPING = {
+    "Lublin": -1004402210524,       # @Praca_Lublin
+    "Białystok": -1004359303051,    # @Praca_Belostok
+    "Radom": -1003797919409,        # @Praca_Radom
+    "Częstochowa": -1004372087006,  # @Praca_Czestochowa
+    "Gdynia": -1004432735605        # @Praca_w_Gdynie
 }
 
 UMOWY = [
@@ -163,7 +173,7 @@ TEXTS = {
             "🏙 Город: {city}\n"
             "⏰ Занятость: {etat}\n"
             "📋 Договор: {umowa}\n\n"
-            "🔍 Ищу свежие вакансии на OLX, Praca.pl и RocketJobs..."
+            "🔍 Ищу свежие вакансии на OLX, Praca.pl и Rocket Jobs..."
         ),
         "loading_city": (
             "🔍 По этому городу собираю свежие вакансии...\n"
@@ -224,7 +234,7 @@ TEXTS = {
             "📋 Umowa: {umowa}\n\n"
             "🔍 Szukam ofert na OLX, Praca.pl i RocketJobs..."
         ),
-        "loading_city": "🔍 Szukam nowych ofert dla tego miasta...\nPoczekaj 30–60 секунд.",
+        "loading_city": "🔍 Szukam nowych ofert dla tego miasta...\nPoczekaj 30–60 sekund.",
         "no_jobs": "😔 Brak ofert. Sprawdzam co 15 min!",
         "menu_active": "🟢 Bot działa i szuka ofert. Przyciski poniżej 👇",
         "stop_donate": (
@@ -255,7 +265,7 @@ TEXTS = {
             "nowych ofert, potwierdź, że nadal szukasz pracy! 👇"
         ),
         "btn_continue": "🔄 Kontynuuj wyszukiwanie",
-        "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowe oferty już wkrótce! 🚀",
+        "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowе oferty już wkrótce! 🚀",
     },
     "ua": {
         "welcome": (
@@ -537,18 +547,22 @@ def db_get_sent_job_ids(tid) -> set:
     """
     Бронебойный запрос истории отправки.
     Повторяет при любых сбоях сети. Если база не ответила — возвращает None (Fail-Safe),
-    чтобы бот пропустил юзера и ни в коем случае не слал дубликаты!
+    чтобы бот пропустил юзера/канал и ни в коем случае не слал дубликаты!
     """
     for attempt in range(3):
         try:
-            r = supabase.table("sent_jobs").select("job_id").eq("telegram_id", tid).execute()
+            target_id = tid
+            if isinstance(tid, str) and tid.startswith("@"):
+                target_id = int(hashlib.md5(tid.encode()).hexdigest()[:8], 16) * -1
+
+            r = supabase.table("sent_jobs").select("job_id").eq("telegram_id", target_id).execute()
             return {row["job_id"] for row in r.data} if r.data else set()
         except Exception as e:
             if attempt < 2:
                 time.sleep(0.5 * (attempt + 1))
                 continue
             logger.error(f"❌ db_get_sent_job_ids failed for {tid} after 3 attempts: {e}")
-            return None  # Предохранитель: возвращаем None вместо пустого сета!
+            return None
     return None
 
 
@@ -558,7 +572,11 @@ def db_mark_sent_batch(tid, job_ids: list) -> bool:
         return True
     for attempt in range(3):
         try:
-            records = [{"telegram_id": tid, "job_id": jid} for jid in job_ids]
+            target_id = tid
+            if isinstance(tid, str) and tid.startswith("@"):
+                target_id = int(hashlib.md5(tid.encode()).hexdigest()[:8], 16) * -1
+
+            records = [{"telegram_id": target_id, "job_id": jid} for jid in job_ids]
             supabase.table("sent_jobs").upsert(
                 records,
                 on_conflict="telegram_id,job_id",
@@ -742,10 +760,8 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
     async with get_user_lock(tid):
         sent, sf, ss, blocked = 0, 0, 0, 0
         
-        # Получаем историю отправки с предохранителем
         already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, tid)
         
-        # ЕСЛИ БЫЛ СБОЙ СЕТИ И БАЗА НЕ ОТВЕТИЛА — ПРОПУСКАЕМ ЮЗЕРА (НОЛЬ СПАМА ДУБЛЯМИ!)
         if already_sent_ids is None:
             logger.warning(f"⚠️ Skipping user {tid} in this cycle due to DB history fetch error.")
             return 0
@@ -849,6 +865,62 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
                     pass
 
         return sent
+
+
+# ==================== AUTO-POSTING TO CHANNELS ====================
+
+async def post_jobs_to_channels():
+    """
+    Фоновая задача автопостинга свежих вакансий в Telegram-каналы сателлиты.
+    Отсылает по 5 самых свежих вакансий за один цикл, с паузой в 3 сек.
+    """
+    logger.info("📢 Starting channel auto-posting process...")
+    for city, channel in CHANNELS_MAPPING.items():
+        try:
+            jobs = await asyncio.to_thread(db_get_jobs_for_city, city, limit=50, hours=24)
+            if not jobs:
+                continue
+
+            already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, channel)
+            if already_sent_ids is None:
+                continue
+
+            sent_count = 0
+            sent_job_ids_batch = []
+
+            for job in reversed(jobs):
+                if sent_count >= 5:  # Максимум 5 постов за 15 минут в один канал
+                    break
+
+                job_id = job.get("id")
+                if job_id is None or job_id in already_sent_ids:
+                    continue
+
+                if is_invalid_olx_url(job.get("url")) or is_delivery_job(job):
+                    continue
+
+                try:
+                    await bot.send_message(
+                        chat_id=channel,
+                        text=format_job(job),
+                        parse_mode="HTML",
+                        disable_web_page_preview=True
+                    )
+                    sent_job_ids_batch.append(job_id)
+                    already_sent_ids.add(job_id)
+                    sent_count += 1
+                    
+                    await asyncio.sleep(3.0)
+                except Exception as post_error:
+                    logger.error(f"Failed to send post to channel {channel}: {post_error}")
+                    break
+
+            if sent_job_ids_batch:
+                await asyncio.to_thread(db_mark_sent_batch, channel, sent_job_ids_batch)
+                logger.info(f"📢 Posted {sent_count} new vacancies into channel: {channel}")
+
+        except Exception as city_error:
+            logger.error(f"Error in channel posting for city {city}: {city_error}")
 
 
 # ==================== KEYBOARDS ====================
@@ -957,7 +1029,7 @@ async def update_bot_description():
         active = stats.get("active", 0)
         
         if total == 0:
-            return  # Защита от записи нулей при сбое базы
+            return
             
         description_text = (
             "Зачем пахать над поиском работы, чилль на диване "
@@ -1256,6 +1328,7 @@ async def scheduled_check():
 
         if not filters:
             logger.info("No active filters found.")
+            await post_jobs_to_channels()
             return
 
         now = datetime.now(timezone.utc)
@@ -1295,6 +1368,7 @@ async def scheduled_check():
 
         if not active_filters:
             logger.info("No filters left after renewal check.")
+            await post_jobs_to_channels()
             return
 
         cities = list({f.get("city", "all") for f in active_filters})
@@ -1376,6 +1450,9 @@ async def scheduled_check():
             f"✅ Done: users={len(active_filters)}, cities={len(cities)}, "
             f"sent={total_sent}, duration={elapsed:.1f}s"
         )
+        
+        # ЗАПУСК АВТОПОСТИНГА В КАНАЛЫ
+        await post_jobs_to_channels()
 
     except asyncio.CancelledError:
         elapsed = (datetime.now(timezone.utc) - started).total_seconds()
@@ -1406,7 +1483,7 @@ async def main():
 
     s = AsyncIOScheduler(timezone="UTC")
     
-    # 1. Регулярная рассылка новых вакансий в чаты (Каждые 15 минут)
+    # 1. Рассылка юзерам и каналам каждые 15 минут
     s.add_job(
         scheduled_check,
         "interval",
@@ -1419,7 +1496,7 @@ async def main():
         next_run_time=datetime.now(timezone.utc) + timedelta(seconds=10),
     )
     
-    # 2. VIP запуск парсера на GitHub Actions (Каждые 25 минут)
+    # 2. VIP запуск парсера на GitHub каждые 25 минут
     s.add_job(
         auto_trigger_github_scraper,
         "interval",
@@ -1432,7 +1509,7 @@ async def main():
         next_run_time=datetime.now(timezone.utc) + timedelta(seconds=20),
     )
     
-    # 3. Автоматическое обновление описания и статистики бота (Каждый час)
+    # 3. Обновление описания бота раз в час
     s.add_job(
         update_bot_description,
         "interval",
@@ -1442,12 +1519,12 @@ async def main():
         max_instances=1,
         coalesce=True,
         misfire_grace_time=300,
-        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=30),
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=15),
     )
     
     s.start()
 
-    logger.info("⏰ Scheduler started: check in 10s, VIP scraper in 20s, description update in 30s")
+    logger.info("⏰ Scheduler started: check in 10s, description in 15s, VIP scraper in 20s")
 
     try:
         await dp.start_polling(bot)
