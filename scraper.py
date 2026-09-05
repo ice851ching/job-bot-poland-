@@ -8,7 +8,6 @@ import argparse
 import random
 import time
 from datetime import datetime, timezone, timedelta
-from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from curl_cffi import requests as cr
@@ -24,12 +23,15 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Города твоих Telegram-каналов (парсер будет шерстить их ВСЕГДА!)
+CHANNEL_CITIES = ["Lublin", "Białystok", "Radom", "Częstochowa", "Gdynia"]
+
 MAIN_SCAN_CITIES = [
     "Warszawa", "Kraków", "Wrocław", "Poznań", "Gdańsk",
     "Łódź", "Katowice", "Lublin", "Toruń", "Szczecin",
     "Bydgoszcz", "Gdynia", "Białystok", "Rzeszów",
     "Kielce", "Gliwice", "Zabrze", "Olsztyn", "Opole",
-    "Częstochowa"
+    "Częstochowa", "Radom"
 ]
 
 CITY_SLUGS = {
@@ -44,14 +46,6 @@ CITY_SLUGS = {
     "zielona góra": "zielona-gora", "radom": "radom", "tychy": "tychy",
     "tarnów": "tarnow", "tarnow": "tarnow",
 }
-
-
-def is_night_time() -> bool:
-    try:
-        local_time = datetime.now(ZoneInfo("Europe/Warsaw"))
-        return local_time.hour >= 23 or local_time.hour < 8
-    except Exception:
-        return False
 
 
 def get_city_slug(city: str) -> str:
@@ -72,7 +66,6 @@ def strip_html(text):
     text = re.sub(r"\.css-[a-z0-9]+\{[^}]*\}", "", text)
     text = re.sub(r"&nbsp;", " ", text)
     text = re.sub(r"&amp;", "&", text)
-    text = re.sub(r"\s+", " ", text)
     return text.strip()
 
 
@@ -90,7 +83,7 @@ def normalize_umowa(text):
         return "b2b"
     if any(x in t for x in ["dzieło", "dzielo"]) or re.search(r'\b(uod)\b', t):
         return "umowa_o_dzielo"
-    if any(x in t for x in ["staż", "staz", "praktyk", "praktyка", "internship"]):
+    if any(x in t for x in ["staż", "staz", "praktyк", "praktyki", "internship"]):
         return "staz"
     return None
 
@@ -103,7 +96,7 @@ def normalize_etat(text, salary_text=None):
     t = str(text).lower().strip()
     if any(x in t for x in ["parttime", "part time", "niepełny", "niepelny", "неполный", "неповний", "1/2", "3/4", "1/4", "pół etatu", "czesc etatu", "dodatkowa", "dorywcza", "student"]):
         return "part"
-    if any(x in t for x in ["fulltime", "full time", "pełny", "pelny", "pełен", "pelen", "cały etat", "полный", "повний", "1/1", "etatowa"]):
+    if any(x in t for x in ["fulltime", "full time", "pełny", "pelny", "pełен", "pelen", "cały etat", "caly etat"]):
         return "full"
     if salary_text and any(x in str(salary_text).lower() for x in ["mies", "m-c", "mc", "/ m", "zł/mies"]):
         return "full"
@@ -222,17 +215,24 @@ def cleanup_old_jobs():
 
 
 def get_active_cities_from_db() -> list:
+    """
+    Выбирает города активных юзеров, и ГАРАНТИРОВАННО добавляет города твоих каналов,
+    чтобы они наполнялись контентом 24/7!
+    """
     try:
         r = supabase.table("user_filters").select("city").eq("is_paused", False).execute()
-        if not r.data:
-            return []
         cities = {row["city"] for row in r.data if row.get("city")}
         if "all" in cities:
             return MAIN_SCAN_CITIES
+            
+        # Гарантированно добавляем города каналов в скан-лист
+        for c in CHANNEL_CITIES:
+            cities.add(c)
+            
         return list(cities)
     except Exception as e:
         logger.error(f"get_active_cities_from_db: {e}")
-        return []
+        return CHANNEL_CITIES
 
 
 # ==================== ПАРСЕРЫ ====================
@@ -533,10 +533,7 @@ async def main():
     parser.add_argument("--city", type=str, default=None)
     args = parser.parse_args()
 
-    if not args.city and is_night_time():
-        logger.info("🌙 Night mode active. Skipping.")
-        sys.exit(0)
-
+    # ПОЛНОСТЬЮ убрали проверку ночного режима — скрейпер пашет круглосуточно 24/7!
     try:
         lt = datetime.now(ZoneInfo("Europe/Warsaw"))
         if not args.city and lt.hour == 8 and lt.minute < 35:
