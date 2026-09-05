@@ -5,6 +5,7 @@ import re
 import time
 import hashlib
 import html
+import json  # Добавили стандартный импорт JSON для обработки WebApp-пакетов
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor
@@ -16,7 +17,7 @@ from aiogram.types import (
     Message, CallbackQuery,
     InlineKeyboardMarkup, InlineKeyboardButton,
     ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
-    WebAppInfo
+    WebAppInfo, URLInputFile  # Добавлен URLInputFile для отправки документов по ссылкам
 )
 from aiogram.filters import Command
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
@@ -62,7 +63,7 @@ DONATE_ACCOUNT = "84 9511 0000 0052 9681 3000 0010"
 
 PROMO_TEXT = (
     "💼 <b>Ищешь подработку с гибким графиком в Польше?</b>\n\n"
-    "Подключайся к доставке через <b>MB Partners</b> и выходи на заказы в "
+    "Подключайся к доставке через <b>MB Partners</b> и выходи на заказы in "
     "<b>Glovo / Uber Eats / Bolt Food</b>.\n\n"
     "Что по условиям:\n"
     "• свободный график — можно совмещать с учёбой или основной работой\n"
@@ -124,7 +125,7 @@ CITY_SLUGS = {
     "sosnowiec": "sosnowiec",
     "rzeszów": "rzeszow", "rzeszow": "rzeszow",
     "kielce": "kielce", "gliwice": "gliwice",
-    "zabrze": "zabrze", "olstyn": "olstyn", "opole": "opole",
+    "zabrze": "zabrze", "olsztyn": "olsztyn", "opole": "opole",
     "zielona góra": "zielona-gora", "zielona gora": "zielona-gora",
     "radom": "radom",
 }
@@ -202,7 +203,7 @@ TEXTS = {
             f"<b>{BTN_RESET}</b> — настроить фильтры заново\n"
             f"<b>{BTN_STOP}</b> — остановить рассылку\n"
             f"<b>{BTN_HELP}</b> — эта справка\n"
-            "<b>📄 Создать резюме</b> — конструктор резюме прямо в Telegram\n\n"
+            "<b>#⃣ Создать резюме</b> — конструктор резюме с моментальным получением PDF в чат\n\n"
             "По вопросам и сотрудничеству: @Hriaker1"
         ),
         "already_stopped": "ℹ️ Ты не подписан на вакансии. Нажми кнопку ниже чтобы начать.",
@@ -221,7 +222,7 @@ TEXTS = {
         ),
         "btn_continue": "🔄 Продолжить поиск",
         "search_renewed": "🟢 Отлично! Поиск успешно возобновлен еще на 3 дня. Свежие вакансии уже в пути! 🚀",
-        "btn_cv": "📄 Создать резюме",
+        "btn_cv": "#⃣ Создать резюме",
     },
     "pl": {
         "welcome": (
@@ -255,7 +256,7 @@ TEXTS = {
             f"<b>{BTN_RESET}</b> — ustaw filtry od nowa\n"
             f"<b>{BTN_STOP}</b> — zatrzymaj wysyłkę\n"
             f"<b>{BTN_HELP}</b> — ta pomoc\n"
-            "<b>📄 Stwórz CV</b> — kreator CV bezpośrednio w Telegramie\n\n"
+            "<b>#⃣ Stwórz CV</b> — kreator CV z natychmiastowym otrzymaniem pliku PDF w czacie\n\n"
             "Pytania i współpraca: @Hriaker1"
         ),
         "already_stopped": "ℹ️ Nie masz subskrypcji. Naciśnij przycisk poniżej.",
@@ -273,7 +274,7 @@ TEXTS = {
         ),
         "btn_continue": "🔄 Kontynuuj wyszukiwanie",
         "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowe oferty już wkrótce! 🚀",
-        "btn_cv": "📄 Stwórz CV",
+        "btn_cv": "#⃣ Stwórz CV",
     },
     "ua": {
         "welcome": (
@@ -307,7 +308,7 @@ TEXTS = {
             f"<b>{BTN_RESET}</b> — налаштувати фільтри заново\n"
             f"<b>{BTN_STOP}</b> — зупинити розсилку\n"
             f"<b>{BTN_HELP}</b> — ця довідка\n"
-            "<b>📄 Створити резюме</b> — конструктор резюме прямо в Telegram\n\n"
+            "<b>#⃣ Створити резюме</b> — конструктор резюме з миттєвим отриманням PDF в чаті\n\n"
             "Питання та співпраця: @Hriaker1"
         ),
         "already_stopped": "ℹ️ Ти не підписаний. Натисни кнопку нижче.",
@@ -325,7 +326,7 @@ TEXTS = {
         ),
         "btn_continue": "🔄 Продовжити пошук",
         "search_renewed": "🟢 Чудово! Пошук успішно відновлено ще на 3 дні. Свіжі вакансії вже летять до тебе! 🚀",
-        "btn_cv": "📄 Створити резюме",
+        "btn_cv": "#⃣ Створити резюме",
     },
 }
 
@@ -987,7 +988,7 @@ def kb_umowa():
 
 
 def kb_active_menu(lang="ru"):
-    btn_cv_text = TEXTS.get(lang, TEXTS["ru"]).get("btn_cv", "📄 Создать резюме")
+    btn_cv_text = TEXTS.get(lang, TEXTS["ru"]).get("btn_cv", "#⃣ Создать резюме")
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_RESET), KeyboardButton(text=BTN_STOP)],
@@ -1131,6 +1132,48 @@ def db_init_channels():
 
 
 # ==================== HANDLERS ====================
+
+@router.message(F.web_app_data)
+async def web_app_data_handler(m: Message):
+    """
+    Принимает закодированные в WebApp данные, скачивает сгенерированный 
+    мобильным устройством PDF и отправляет его пользователю в чат напрямую.
+    """
+    try:
+        data = json.loads(m.web_app_data.data)
+        action = data.get("action")
+        
+        if action == "send_pdf":
+            pdf_url = data.get("url")
+            filename = data.get("filename", "CV_Resume.pdf")
+            lang = await asyncio.to_thread(get_user_lang, m.from_user.id)
+            
+            loading_texts = {
+                "ru": "⏳ <i>Получаю твое резюме, сейчас пришлю файл...</i>",
+                "pl": "⏳ <i>Pobieram Twoje CV, zaraz wyślę plik...</i>",
+                "ua": "⏳ <i>Отримую твоє резюме, зараз надішлю файл...</i>"
+            }
+            
+            loading_msg = await m.answer(loading_texts.get(lang, loading_texts["ru"]), parse_mode="HTML")
+            
+            try:
+                doc = URLInputFile(pdf_url, filename=filename)
+                await bot.send_document(chat_id=m.chat.id, document=doc)
+            finally:
+                try:
+                    await bot.delete_message(chat_id=m.chat.id, message_id=loading_msg.message_id)
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.error(f"Error handling web_app_data: {e}")
+        lang = await asyncio.to_thread(get_user_lang, m.from_user.id)
+        error_texts = {
+            "ru": "❌ Произошла ошибка при отправке файла.",
+            "pl": "❌ Wystąpił błąd podczas wysyłania pliku.",
+            "ua": "❌ Сталася помилка при надсиланні файлу."
+        }
+        await m.answer(error_texts.get(lang, error_texts["ru"]))
+
 
 @router.message(Command("admin"), F.from_user.id == ADMIN_ID)
 async def cmd_admin(m: Message, state: FSMContext):
