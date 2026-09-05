@@ -15,7 +15,8 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.types import (
     Message, CallbackQuery,
     InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
+    WebAppInfo
 )
 from aiogram.filters import Command
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
@@ -123,7 +124,7 @@ CITY_SLUGS = {
     "sosnowiec": "sosnowiec",
     "rzeszów": "rzeszow", "rzeszow": "rzeszow",
     "kielce": "kielce", "gliwice": "gliwice",
-    "zabrze": "zabrze", "olsztyn": "olsztyn", "opole": "opole",
+    "zabrze": "zabrze", "olstyn": "olstyn", "opole": "opole",
     "zielona góra": "zielona-gora", "zielona gora": "zielona-gora",
     "radom": "radom",
 }
@@ -200,7 +201,8 @@ TEXTS = {
             "<b>Управление:</b>\n"
             f"<b>{BTN_RESET}</b> — настроить фильтры заново\n"
             f"<b>{BTN_STOP}</b> — остановить рассылку\n"
-            f"<b>{BTN_HELP}</b> — эта справка\n\n"
+            f"<b>{BTN_HELP}</b> — эта справка\n"
+            "<b>📄 Создать резюме</b> — конструктор резюме прямо в Telegram\n\n"
             "По вопросам и сотрудничеству: @Hriaker1"
         ),
         "already_stopped": "ℹ️ Ты не подписан на вакансии. Нажми кнопку ниже чтобы начать.",
@@ -219,6 +221,7 @@ TEXTS = {
         ),
         "btn_continue": "🔄 Продолжить поиск",
         "search_renewed": "🟢 Отлично! Поиск успешно возобновлен еще на 3 дня. Свежие вакансии уже в пути! 🚀",
+        "btn_cv": "📄 Создать резюме",
     },
     "pl": {
         "welcome": (
@@ -251,7 +254,8 @@ TEXTS = {
             "Agreguje oferty pracy z OLX, Praca.pl i RocketJobs.\n\n"
             f"<b>{BTN_RESET}</b> — ustaw filtry od nowa\n"
             f"<b>{BTN_STOP}</b> — zatrzymaj wysyłkę\n"
-            f"<b>{BTN_HELP}</b> — ta pomoc\n\n"
+            f"<b>{BTN_HELP}</b> — ta pomoc\n"
+            "<b>📄 Stwórz CV</b> — kreator CV bezpośrednio w Telegramie\n\n"
             "Pytania i współpraca: @Hriaker1"
         ),
         "already_stopped": "ℹ️ Nie masz subskrypcji. Naciśnij przycisk poniżej.",
@@ -269,6 +273,7 @@ TEXTS = {
         ),
         "btn_continue": "🔄 Kontynuuj wyszukiwanie",
         "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowe oferty już wkrótce! 🚀",
+        "btn_cv": "📄 Stwórz CV",
     },
     "ua": {
         "welcome": (
@@ -301,7 +306,8 @@ TEXTS = {
             "Агрегує публічні вакансії з OLX, Praca.pl та RocketJobs.\n\n"
             f"<b>{BTN_RESET}</b> — налаштувати фільтри заново\n"
             f"<b>{BTN_STOP}</b> — зупинити розсилку\n"
-            f"<b>{BTN_HELP}</b> — ця довідка\n\n"
+            f"<b>{BTN_HELP}</b> — ця довідка\n"
+            "<b>📄 Створити резюме</b> — конструктор резюме прямо в Telegram\n\n"
             "Питання та співпраця: @Hriaker1"
         ),
         "already_stopped": "ℹ️ Ти не підписаний. Натисни кнопку нижче.",
@@ -319,6 +325,7 @@ TEXTS = {
         ),
         "btn_continue": "🔄 Продовжити пошук",
         "search_renewed": "🟢 Чудово! Пошук успішно відновлено ще на 3 дні. Свіжі вакансії вже летять до тебе! 🚀",
+        "btn_cv": "📄 Створити резюме",
     },
 }
 
@@ -979,11 +986,12 @@ def kb_umowa():
     ])
 
 
-def kb_active_menu():
+def kb_active_menu(lang="ru"):
+    btn_cv_text = TEXTS.get(lang, TEXTS["ru"]).get("btn_cv", "📄 Создать резюме")
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_RESET), KeyboardButton(text=BTN_STOP)],
-            [KeyboardButton(text=BTN_HELP)],
+            [KeyboardButton(text=BTN_HELP), KeyboardButton(text=btn_cv_text, web_app=WebAppInfo(url="https://workcvapp.netlify.app/"))],
         ],
         resize_keyboard=True
     )
@@ -1354,7 +1362,7 @@ async def on_umowa(c: CallbackQuery, state: FSMContext):
         await c.message.edit_text(t(lang, "saved", city=cd, etat=ed, umowa=ud))
         await c.answer()
 
-        await bot.send_message(c.from_user.id, t(lang, "menu_active"), reply_markup=kb_active_menu())
+        await bot.send_message(c.from_user.id, t(lang, "menu_active"), reply_markup=kb_active_menu(lang))
         await send_promo(c.from_user.id)
         await asyncio.sleep(1)
 
