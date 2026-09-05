@@ -147,7 +147,7 @@ UMOWY = [
 UMOWY_DISPLAY = {
     "umowa_o_prace": "Umowa o pracę",
     "umowa_zlecenie": "Umowa zlecenie",
-    "umowa_o_dzielo": "Umowa о dzieło",
+    "umowa_o_dzielo": "Umowa o dzieło",
     "b2b": "B2B",
     "staz": "Staż / Praktyki",
 }
@@ -194,7 +194,7 @@ TEXTS = {
         "help": (
             "🤖 <b>Что умеет бот:</b>\n\n"
             "Агрегирует публично доступные вакансии "
-            "с OLX, Praca.pl и RocketJobs и присылает их тебе.\n\n"
+            "с OLX, Praca.pl и GoWork и присылает их тебе.\n\n"
             "<b>Управление:</b>\n"
             f"<b>{BTN_RESET}</b> — настроить фильтры заново\n"
             f"<b>{BTN_STOP}</b> — остановить рассылку\n"
@@ -235,7 +235,7 @@ TEXTS = {
             "📋 Umowa: {umowa}\n\n"
             "🔍 Szukam ofert na OLX, Praca.pl i RocketJobs..."
         ),
-        "loading_city": "🔍 Szukam nowych ofert dla tego miasta...\nPoczekaj 30–60 sekund.",
+        "loading_city": "🔍 Szukam nowych ofert dla tego miasta...\nPoczekaj 30–60 секунд.",
         "no_jobs": "😔 Brak ofert. Sprawdzam co 15 min!",
         "menu_active": "🟢 Bot działa i szuka ofert. Przyciski poniżej 👇",
         "stop_donate": (
@@ -266,12 +266,12 @@ TEXTS = {
             "nowych ofert, potwierdź, że nadal szukasz pracy! 👇"
         ),
         "btn_continue": "🔄 Kontynuuj wyszukiwanie",
-        "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowe oferty już wkrótce! 🚀",
+        "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowе oferty już wkrótce! 🚀",
     },
     "ua": {
         "welcome": (
             "👋 Привіт! Допоможу знайти роботу в Польщі.\n\n"
-            "Бот надсилатиме нові вакансії з OLX, Praca.pl та RocketJobs.\n\n"
+            "Бот надсилатиме нові вакансії з OLX та Praca.pl.\n\n"
             "Обери мову:"
         ),
         "choose_city": "🏙 Обери місто:",
@@ -871,62 +871,6 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
         return sent
 
 
-# ==================== AUTO-POSTING TO CHANNELS ====================
-
-async def post_jobs_to_channels():
-    """
-    Фоновая задача автопостинга свежих вакансий в Telegram-каналы сателлиты.
-    Отсылает по 5 самых свежих вакансий за один цикл, с паузой в 3 сек.
-    """
-    logger.info("📢 Starting channel auto-posting process...")
-    for city, channel in CHANNELS_MAPPING.items():
-        try:
-            jobs = await asyncio.to_thread(db_get_jobs_for_city, city, limit=50, hours=24)
-            if not jobs:
-                continue
-
-            already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, channel)
-            if already_sent_ids is None:
-                continue
-
-            sent_count = 0
-            sent_job_ids_batch = []
-
-            for job in reversed(jobs):
-                if sent_count >= 5:  # Максимум 5 постов за 15 минут в один канал
-                    break
-
-                job_id = job.get("id")
-                if job_id is None or job_id in already_sent_ids:
-                    continue
-
-                if is_invalid_olx_url(job.get("url")) or is_delivery_job(job):
-                    continue
-
-                try:
-                    await bot.send_message(
-                        chat_id=channel,
-                        text=format_job(job),
-                        parse_mode="HTML",
-                        disable_web_page_preview=True
-                    )
-                    sent_job_ids_batch.append(job_id)
-                    already_sent_ids.add(job_id)
-                    sent_count += 1
-                    
-                    await asyncio.sleep(3.0)
-                except Exception as post_error:
-                    logger.error(f"Failed to send post to channel {channel}: {post_error}")
-                    break
-
-            if sent_job_ids_batch:
-                await asyncio.to_thread(db_mark_sent_batch, channel, sent_job_ids_batch)
-                logger.info(f"📢 Posted {sent_count} new vacancies into channel: {channel}")
-
-        except Exception as city_error:
-            logger.error(f"Error in channel posting for city {city}: {city_error}")
-
-
 # ==================== KEYBOARDS ====================
 
 def kb_lang():
@@ -1027,6 +971,8 @@ async def auto_trigger_github_scraper():
 
 # ==================== AUTOMATIC BOT DESCRIPTION UPDATE ====================
 
+# ==================== AUTOMATIC BOT DESCRIPTION UPDATE ====================
+
 async def update_bot_description():
     """
     Раз в час обновляет описание бота (What can this bot do?) в Telegram,
@@ -1034,18 +980,17 @@ async def update_bot_description():
     """
     try:
         stats = await asyncio.to_thread(db_get_bot_stats)
-        total = stats.get("total", 0)
-        active = stats.get("active", 0)
+        total = stats["total"]
+        active = stats["active"]
         
-        if total == 0:
-            return
-            
+        # Сделали ровно 1 перенос строки (\n), чтобы статистика была вплотную к тексту
         description_text = (
             "Зачем пахать над поиском работы, чилль на диване "
             "пока твой цифровой раб пылесосит вакансии 24/7\n"
             f"👥 Всего: {total} / 🟢 Активных: {active}"
         )
         
+        # Обновляем описание для дефолтного и основных языковых кодов
         await bot.set_my_description(description=description_text)
         await bot.set_my_description(description=description_text, language_code="ru")
         await bot.set_my_description(description=description_text, language_code="pl")
