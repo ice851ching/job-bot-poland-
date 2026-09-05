@@ -4,6 +4,7 @@ import logging
 import re
 import time
 import hashlib
+import html
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
@@ -174,7 +175,7 @@ TEXTS = {
             "🏙 Город: {city}\n"
             "⏰ Занятость: {etat}\n"
             "📋 Договор: {umowa}\n\n"
-            "🔍 Ищу свежие вакансии на OLX, Praca.pl и Rocket Jobs..."
+            "🔍 Ищу свежие вакансии на OLX, Praca.pl и RocketJobs..."
         ),
         "loading_city": (
             "🔍 По этому городу собираю свежие вакансии...\n"
@@ -194,7 +195,7 @@ TEXTS = {
         "help": (
             "🤖 <b>Что умеет бот:</b>\n\n"
             "Агрегирует публично доступные вакансии "
-            "с OLX, Praca.pl и GoWork и присылает их тебе.\n\n"
+            "с OLX, Praca.pl и RocketJobs и присылает их тебе.\n\n"
             "<b>Управление:</b>\n"
             f"<b>{BTN_RESET}</b> — настроить фильтры заново\n"
             f"<b>{BTN_STOP}</b> — остановить рассылку\n"
@@ -266,12 +267,12 @@ TEXTS = {
             "nowych ofert, potwierdź, że nadal szukasz pracy! 👇"
         ),
         "btn_continue": "🔄 Kontynuuj wyszukiwanie",
-        "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowе oferty już wkrótce! 🚀",
+        "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowe oferty już wkrótce! 🚀",
     },
     "ua": {
         "welcome": (
             "👋 Привіт! Допоможу знайти роботу в Польщі.\n\n"
-            "Бот надсилатиме нові вакансії з OLX та Praca.pl.\n\n"
+            "Бот надсилатиме нові вакансії з OLX, Praca.pl та RocketJobs.\n\n"
             "Обери мову:"
         ),
         "choose_city": "🏙 Обери місто:",
@@ -726,24 +727,46 @@ async def start_web_server():
 # ==================== FORMAT & SEND ====================
 
 def format_job(job):
+    """
+    Премиальный UX-дизайн: Заголовок сверху, все подробности внутри аккуратной цитаты blockquote,
+    ссылки снизу. Безопасное экранирование спецсимволов HTML через html.escape.
+    """
+    def clean(text):
+        if not text:
+            return ""
+        cleaned = strip_html(str(text))
+        return html.escape(cleaned)
+
+    title = clean(job.get('title', 'Без названия'))
     ut = UMOWY_DISPLAY.get(job.get("umowa")) or job.get("umowa")
     et = ETAT_DISPLAY.get(job.get("etat")) or job.get("etat")
-    lines = [f"💼 <b>{strip_html(job.get('title', ''))}</b>"]
-    
+
+    # Собираем данные вакансии, которые будут внутри ЦИТАТЫ (плашки с чертой слева)
+    details = []
     if ut:
-        lines.append(f"📄 {strip_html(str(ut))}")
+        details.append(f"📄 {clean(ut)}")
     if et:
-        lines.append(f"⏰ {strip_html(str(et))}")
+        details.append(f"⏰ {clean(et)}")
     if job.get("city"):
-        lines.append(f"📍 {strip_html(job['city'])}")
+        details.append(f"📍 {clean(job['city'])}")
     if job.get("salary"):
-        lines.append(f"💰 {strip_html(job['salary'])}")
-    lines.append(f"📌 {job.get('source', '—')}")
-    if job.get("url"):
-        lines.append(f"🔗 <a href='{job['url']}'>Открыть вакансию</a>")
-    lines.append("")
-    lines.append("🤖 <a href='https://t.me/szukam_pracy_bot'>@szukam_pracy_bot</a> — свежие вакансии в <a href='https://t.me/szukam_pracy_bot'>Польше 🇵🇱</a>")
-    return "\n".join(lines)
+        details.append(f"💰 {clean(job['salary'])}")
+    
+    details.append(f"📌 {clean(job.get('source', '—'))}")
+
+    quote_content = "\n".join(details)
+    
+    url = job.get('url', '')
+    url_line = f"🔗 <a href='{html.escape(url)}'>Открыть вакансию</a>" if url else ""
+
+    message = (
+        f"💼 <b>{title}</b>\n\n"
+        f"<blockquote>{quote_content}</blockquote>\n\n"
+        f"{url_line}\n\n"
+        f"🤖 <a href='https://t.me/szukam_pracy_bot'>@szukam_pracy_bot</a> — свежие вакансии в <a href='https://t.me/szukam_pracy_bot'>Польше 🇵🇱</a>"
+    )
+
+    return message.strip()
 
 
 async def send_promo(chat_id):
@@ -762,10 +785,9 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
     async with get_user_lock(tid):
         sent, sf, ss, blocked = 0, 0, 0, 0
         
-        # Получаем историю отправки с предохранителем
         already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, tid)
         
-        # ЕСЛИ БЫЛ СБОЙ СЕТИ И БАЗА НЕ ОТВЕТИЛА — ПРОПУСКАЕМ ЮЗЕРА (НОЛЬ СПАМА ДУБЛЯМИ!)
+        # Предохранитель от спама дублями при сбоях сети
         if already_sent_ids is None:
             logger.warning(f"⚠️ Skipping user {tid} in this cycle due to DB history fetch error.")
             return 0
@@ -871,6 +893,62 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
         return sent
 
 
+# ==================== AUTO-POSTING TO CHANNELS ====================
+
+async def post_jobs_to_channels():
+    """
+    Фоновая задача автопостинга свежих вакансий в Telegram-каналы сателлиты.
+    Отсылает по 5 самых свежих вакансий за один цикл, с паузой в 3 сек.
+    """
+    logger.info("📢 Starting channel auto-posting process...")
+    for city, channel in CHANNELS_MAPPING.items():
+        try:
+            jobs = await asyncio.to_thread(db_get_jobs_for_city, city, limit=50, hours=24)
+            if not jobs:
+                continue
+
+            already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, channel)
+            if already_sent_ids is None:
+                continue
+
+            sent_count = 0
+            sent_job_ids_batch = []
+
+            for job in reversed(jobs):
+                if sent_count >= 5:  # Максимум 5 постов за 15 минут в один канал
+                    break
+
+                job_id = job.get("id")
+                if job_id is None or job_id in already_sent_ids:
+                    continue
+
+                if is_invalid_olx_url(job.get("url")) or is_delivery_job(job):
+                    continue
+
+                try:
+                    await bot.send_message(
+                        chat_id=channel,
+                        text=format_job(job),
+                        parse_mode="HTML",
+                        disable_web_page_preview=True
+                    )
+                    sent_job_ids_batch.append(job_id)
+                    already_sent_ids.add(job_id)
+                    sent_count += 1
+                    
+                    await asyncio.sleep(3.0)
+                except Exception as post_error:
+                    logger.error(f"Failed to send post to channel {channel}: {post_error}")
+                    break
+
+            if sent_job_ids_batch:
+                await asyncio.to_thread(db_mark_sent_batch, channel, sent_job_ids_batch)
+                logger.info(f"📢 Posted {sent_count} new vacancies into channel: {channel}")
+
+        except Exception as city_error:
+            logger.error(f"Error in channel posting for city {city}: {city_error}")
+
+
 # ==================== KEYBOARDS ====================
 
 def kb_lang():
@@ -932,20 +1010,43 @@ def kb_renew_search(lang):
 # ==================== BROADCASTER ====================
 
 async def run_broadcast(bot: Bot, admin_id: int, from_chat_id: int, message_id: int, users: list):
-    sent, failed = 0, 0
+    """
+    Рассылка рекламы: Сначала мгновенно публикует во всех каналах сателлитах,
+    а затем плавно рассылает всем активным пользователям в ЛС с подробным отчетом админу.
+    """
+    sent_users, failed_users = 0, 0
+    sent_channels, failed_channels = 0, 0
+    
+    logger.info("📢 Copying broadcast post to all satellite channels...")
+    for city, channel_id in CHANNELS_MAPPING.items():
+        try:
+            await bot.copy_message(chat_id=channel_id, from_chat_id=from_chat_id, message_id=message_id)
+            sent_channels += 1
+            await asyncio.sleep(1.0)
+        except Exception as e:
+            logger.error(f"Failed to copy broadcast to channel {city} ({channel_id}): {e}")
+            failed_channels += 1
+
+    logger.info("👥 Sending broadcast to all active PM users...")
     for uid in users:
         try:
             await bot.copy_message(chat_id=uid, from_chat_id=from_chat_id, message_id=message_id)
-            sent += 1
+            sent_users += 1
             await asyncio.sleep(0.05)
         except Exception:
             await asyncio.to_thread(db_set_user_active, uid, False)
-            failed += 1
+            failed_users += 1
             
     try:
         await bot.send_message(
             admin_id,
-            f"📢 <b>Рассылка успешно завершена!</b>\n\n✅ Получили: {sent}\n❌ Заблокировали: {failed}"
+            f"📢 <b>Рассылка успешно завершена!</b>\n\n"
+            f"<b>👥 Пользователи в ЛС:</b>\n"
+            f"✅ Получили: {sent_users}\n"
+            f"❌ Заблокировали: {failed_users}\n\n"
+            f"<b>📺 Каналы-сателлиты:</b>\n"
+            f"✅ Опубликовано: {sent_channels} из {len(CHANNELS_MAPPING)}\n"
+            f"❌ Ошибки: {failed_channels}"
         )
     except Exception:
         pass
@@ -954,9 +1055,7 @@ async def run_broadcast(bot: Bot, admin_id: int, from_chat_id: int, message_id: 
 # ==================== VIP AUTOMATIC GITHUB TRIGGER ====================
 
 async def auto_trigger_github_scraper():
-    """
-    Каждые 25 минут пинает GitHub через VIP API для мгновенного и точного парсинга по расписанию.
-    """
+    """Каждые 25 минут пинает GitHub через VIP API для мгновенного парсинга"""
     if is_night_time():
         logger.info("🌙 Night time — skipping auto-trigger of GitHub Scraper.")
         return
@@ -971,26 +1070,22 @@ async def auto_trigger_github_scraper():
 
 # ==================== AUTOMATIC BOT DESCRIPTION UPDATE ====================
 
-# ==================== AUTOMATIC BOT DESCRIPTION UPDATE ====================
-
 async def update_bot_description():
-    """
-    Раз в час обновляет описание бота (What can this bot do?) в Telegram,
-    подставляя реальную статистику базы данных.
-    """
+    """Раз в час обновляет описание бота со свежей живой статистикой"""
     try:
         stats = await asyncio.to_thread(db_get_bot_stats)
-        total = stats["total"]
-        active = stats["active"]
+        total = stats.get("total", 0)
+        active = stats.get("active", 0)
         
-        # Сделали ровно 1 перенос строки (\n), чтобы статистика была вплотную к тексту
+        if total == 0:
+            return
+            
         description_text = (
             "Зачем пахать над поиском работы, чилль на диване "
             "пока твой цифровой раб пылесосит вакансии 24/7\n"
             f"👥 Всего: {total} / 🟢 Активных: {active}"
         )
         
-        # Обновляем описание для дефолтного и основных языковых кодов
         await bot.set_my_description(description=description_text)
         await bot.set_my_description(description=description_text, language_code="ru")
         await bot.set_my_description(description=description_text, language_code="pl")
@@ -1478,7 +1573,7 @@ async def main():
     
     s.start()
 
-    logger.info("⏰ Scheduler started: first check in 10s, VIP scraper trigger in 20s, then regular intervals")
+    logger.info("⏰ Scheduler started: check in 10s, VIP scraper in 20s, description in 15s")
 
     try:
         await dp.start_polling(bot)
