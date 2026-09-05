@@ -6,6 +6,7 @@ import time
 import hashlib
 import html
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -150,7 +151,7 @@ UMOWY_DISPLAY = {
     "umowa_zlecenie": "Umowa zlecenie",
     "umowa_o_dzielo": "Umowa o dzieło",
     "b2b": "B2B",
-    "staz": "Staż / Praktyki",
+    "staz": "Staż / Практики",
 }
 
 ETAT_DISPLAY = {
@@ -175,7 +176,7 @@ TEXTS = {
             "🏙 Город: {city}\n"
             "⏰ Занятость: {etat}\n"
             "📋 Договор: {umowa}\n\n"
-            "🔍 Ищу свежие вакансии на OLX, Praca.pl и RocketJobs..."
+            "🔍 Ищу свежие вакансии на OLX, Praca.pl и Rocket Jobs..."
         ),
         "loading_city": (
             "🔍 По этому городу собираю свежие вакансии...\n"
@@ -236,7 +237,7 @@ TEXTS = {
             "📋 Umowa: {umowa}\n\n"
             "🔍 Szukam ofert na OLX, Praca.pl i RocketJobs..."
         ),
-        "loading_city": "🔍 Szukam nowych ofert dla tego miasta...\nPoczekaj 30–60 секунд.",
+        "loading_city": "🔍 Szukam nowych ofert dla tego miasta...\nPoczekaj 30–60 sekund.",
         "no_jobs": "😔 Brak ofert. Sprawdzam co 15 min!",
         "menu_active": "🟢 Bot działa i szuka ofert. Przyciski poniżej 👇",
         "stop_donate": (
@@ -445,11 +446,16 @@ def is_invalid_olx_url(url: str) -> bool:
 
 
 def is_night_time() -> bool:
-    now_utc = datetime.now(timezone.utc)
-    month = now_utc.month
-    offset_hours = 2 if 3 < month < 11 else 1
-    local_time = now_utc + timedelta(hours=offset_hours)
-    return local_time.hour >= 23 or local_time.hour < 8
+    """Определяет ночь по Польше (23:00 - 08:00) с автоматическим учетом DST"""
+    try:
+        local_time = datetime.now(ZoneInfo("Europe/Warsaw"))
+        return local_time.hour >= 23 or local_time.hour < 8
+    except Exception:
+        now_utc = datetime.now(timezone.utc)
+        month = now_utc.month
+        offset_hours = 2 if 3 < month < 11 else 1
+        local_time = now_utc + timedelta(hours=offset_hours)
+        return local_time.hour >= 23 or local_time.hour < 8
 
 
 def parse_iso_datetime(dt_str: str) -> datetime:
@@ -785,9 +791,10 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
     async with get_user_lock(tid):
         sent, sf, ss, blocked = 0, 0, 0, 0
         
+        # Получаем историю отправки с предохранителем
         already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, tid)
         
-        # Предохранитель от спама дублями при сбоях сети
+        # ЕСЛИ БЫЛ СБОЙ СЕТИ И БАЗА НЕ ОТВЕТИЛА — ПРОПУСКАЕМ ЮЗЕРА (НОЛЬ СПАМА ДУБЛЯМИ!)
         if already_sent_ids is None:
             logger.warning(f"⚠️ Skipping user {tid} in this cycle due to DB history fetch error.")
             return 0
@@ -903,6 +910,10 @@ async def post_jobs_to_channels():
     logger.info("📢 Starting channel auto-posting process...")
     for city, channel in CHANNELS_MAPPING.items():
         try:
+            # Сначала ОБЯЗАТЕЛЬНО регистрируем канал в таблице users,
+            # чтобы удовлетворить возможное ограничение внешнего ключа (Foreign Key) в sent_jobs.
+            await asyncio.to_thread(db_upsert_user, channel, f"Channel_{city}")
+
             jobs = await asyncio.to_thread(db_get_jobs_for_city, city, limit=50, hours=24)
             if not jobs:
                 continue
@@ -1055,7 +1066,9 @@ async def run_broadcast(bot: Bot, admin_id: int, from_chat_id: int, message_id: 
 # ==================== VIP AUTOMATIC GITHUB TRIGGER ====================
 
 async def auto_trigger_github_scraper():
-    """Каждые 25 минут пинает GitHub через VIP API для мгновенного парсинга"""
+    """
+    Каждые 25 минут пинает GitHub через VIP API для мгновенного и точного парсинга по расписанию.
+    """
     if is_night_time():
         logger.info("🌙 Night time — skipping auto-trigger of GitHub Scraper.")
         return
@@ -1071,7 +1084,10 @@ async def auto_trigger_github_scraper():
 # ==================== AUTOMATIC BOT DESCRIPTION UPDATE ====================
 
 async def update_bot_description():
-    """Раз в час обновляет описание бота со свежей живой статистикой"""
+    """
+    Раз в час обновляет описание бота (What can this bot do?) в Telegram,
+    подставляя реальную статистику базы данных.
+    """
     try:
         stats = await asyncio.to_thread(db_get_bot_stats)
         total = stats.get("total", 0)
@@ -1525,8 +1541,8 @@ async def main():
 
     try:
         loop = asyncio.get_running_loop()
-        loop.set_default_executor(ThreadPoolExecutor(max_workers=5))
-        logger.info("⚙️ Thread pool executor limited to 5 workers for Render stability.")
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=20)) # <--- УВЕЛИЧИЛИ ДО 20 РАБОЧИХ
+        logger.info("⚙️ Thread pool executor limited to 20 workers for Render stability.")
     except Exception as e:
         logger.warning(f"Failed to set custom thread pool executor: {e}")
 
@@ -1573,7 +1589,7 @@ async def main():
     
     s.start()
 
-    logger.info("⏰ Scheduler started: check in 10s, VIP scraper in 20s, description in 15s")
+    logger.info("⏰ Scheduler started: first check in 10s, VIP scraper trigger in 20s, then regular intervals")
 
     try:
         await dp.start_polling(bot)
