@@ -365,7 +365,6 @@ def strip_html(text):
     text = re.sub(r"\.css-[a-z0-9]+\{[^}]*\}", "", text)
     text = re.sub(r"&nbsp;", " ", text)
     text = re.sub(r"&amp;", "&", text)
-    text = re.sub(r"\s+", " ", text)
     return text.strip()
 
 
@@ -443,19 +442,6 @@ def is_invalid_olx_url(url: str) -> bool:
             return True
         
     return False
-
-
-def is_night_time() -> bool:
-    """Определяет ночь по Польше (23:00 - 08:00) с автоматическим учетом DST"""
-    try:
-        local_time = datetime.now(ZoneInfo("Europe/Warsaw"))
-        return local_time.hour >= 23 or local_time.hour < 8
-    except Exception:
-        now_utc = datetime.now(timezone.utc)
-        month = now_utc.month
-        offset_hours = 2 if 3 < month < 11 else 1
-        local_time = now_utc + timedelta(hours=offset_hours)
-        return local_time.hour >= 23 or local_time.hour < 8
 
 
 def parse_iso_datetime(dt_str: str) -> datetime:
@@ -554,16 +540,11 @@ def db_get_all_active_users():
 def db_get_sent_job_ids(tid) -> set:
     """
     Бронебойный запрос истории отправки.
-    Повторяет при любых сбоях сети. Если база не ответила — возвращает None (Fail-Safe),
-    чтобы бот пропустил юзера/канал и ни в коем случае не слал дубликаты!
+    Передаёт ID напрямую в Supabase, без лишней MD5-магии.
     """
     for attempt in range(3):
         try:
-            target_id = tid
-            if isinstance(tid, str) and tid.startswith("@"):
-                target_id = int(hashlib.md5(tid.encode()).hexdigest()[:8], 16) * -1
-
-            r = supabase.table("sent_jobs").select("job_id").eq("telegram_id", target_id).execute()
+            r = supabase.table("sent_jobs").select("job_id").eq("telegram_id", tid).execute()
             return {row["job_id"] for row in r.data} if r.data else set()
         except Exception as e:
             if attempt < 2:
@@ -575,16 +556,12 @@ def db_get_sent_job_ids(tid) -> set:
 
 
 def db_mark_sent_batch(tid, job_ids: list) -> bool:
-    """Пакетная фиксация с автоповтором на любые сетевые ошибки"""
+    """Пакетная фиксация отправки напрямую в Supabase"""
     if not job_ids:
         return True
     for attempt in range(3):
         try:
-            target_id = tid
-            if isinstance(tid, str) and tid.startswith("@"):
-                target_id = int(hashlib.md5(tid.encode()).hexdigest()[:8], 16) * -1
-
-            records = [{"telegram_id": target_id, "job_id": jid} for jid in job_ids]
+            records = [{"telegram_id": tid, "job_id": jid} for jid in job_ids]
             supabase.table("sent_jobs").upsert(
                 records,
                 on_conflict="telegram_id,job_id",
@@ -622,6 +599,7 @@ def db_renew_search_filter(tid):
 
 def db_pause_search_filter(tid):
     try:
+        now_str = datetime.now(timezone.utc).isoformat()
         supabase.table("user_filters").update({
             "is_paused": True
         }).eq("telegram_id", tid).execute()
@@ -911,10 +889,11 @@ async def post_jobs_to_channels():
     for city, channel in CHANNELS_MAPPING.items():
         try:
             # Сначала ОБЯЗАТЕЛЬНО регистрируем канал в таблице users,
-            # чтобы удовлетворить возможное ограничение внешнего ключа (Foreign Key) в sent_jobs.
+            # чтобы удовлетворить ограничение внешнего ключа (Foreign Key) в sent_jobs.
             await asyncio.to_thread(db_upsert_user, channel, f"Channel_{city}")
 
-            jobs = await asyncio.to_thread(db_get_jobs_for_city, city, limit=50, hours=24)
+            # Забираем вакансии за последние 2 часа (СВЕЖАК!), убирая отправку старья
+            jobs = await asyncio.to_thread(db_get_jobs_for_city, city, limit=50, hours=2)
             if not jobs:
                 continue
 
@@ -1069,10 +1048,6 @@ async def auto_trigger_github_scraper():
     """
     Каждые 25 минут пинает GitHub через VIP API для мгновенного и точного парсинга по расписанию.
     """
-    if is_night_time():
-        logger.info("🌙 Night time — skipping auto-trigger of GitHub Scraper.")
-        return
-        
     logger.info("🚀 Triggering scheduled instant scrape via GitHub API...")
     ok = await trigger_scraper_for_city("")
     if ok:
@@ -1110,6 +1085,41 @@ async def update_bot_description():
         logger.info(f"✅ Bot Description updated: {total} total / {active} active")
     except Exception as e:
         logger.error(f"Failed to update bot description: {e}")
+
+
+# ==================== INITIALIZE CHANNELS ====================
+
+def db_init_channels():
+    """
+    Принудительно регистрирует все каналы-сателлиты в базе данных
+    как вечных и активных VIP-пользователей.
+    Благодаря этому каналы никогда не уходят в заморозку,
+    а парсер на Гитхабе ВСЕГДА видит и сканирует их города 24/7!
+    """
+    logger.info("📡 Initializing satellite channels in database...")
+    for city, channel_id in CHANNELS_MAPPING.items():
+        try:
+            # 1. Регистрируем канал в таблице users
+            supabase.table("users").upsert(
+                {"telegram_id": channel_id, "username": f"Channel_{city}", "is_active": True},
+                on_conflict="telegram_id"
+            ).execute()
+            
+            # 2. Создаем для него вечный активный фильтр (is_paused = False)
+            supabase.table("user_filters").upsert(
+                {
+                    "telegram_id": channel_id,
+                    "city": city,
+                    "etat_full": True,
+                    "etat_part": True,
+                    "umowa": "any",
+                    "is_paused": False,
+                    "last_renewal": datetime.now(timezone.utc).isoformat()
+                },
+                on_conflict="telegram_id"
+            ).execute()
+        except Exception as e:
+            logger.error(f"Failed to init channel {city} ({channel_id}): {e}")
 
 
 # ==================== HANDLERS ====================
@@ -1380,11 +1390,6 @@ async def on_renew_search(c: CallbackQuery):
 
 async def scheduled_check():
     started = datetime.now(timezone.utc)
-
-    if is_night_time():
-        logger.info("🌙 Night time — skipping scheduled check.")
-        return
-
     logger.info("⏰ Check started")
 
     try:
@@ -1403,7 +1408,8 @@ async def scheduled_check():
             tid = f["telegram_id"]
             last_renewal_str = f.get("last_renewal")
 
-            if last_renewal_str:
+            # Каналы (отрицательные ID) никогда не уходят в 3-дневную заморозку!
+            if last_renewal_str and tid > 0:
                 try:
                     last_renewal = datetime.fromisoformat(
                         last_renewal_str.replace("Z", "+00:00")
@@ -1487,10 +1493,13 @@ async def scheduled_check():
                 logger.info(f"👤 {tid}: no NEW jobs since subscription start.")
                 return 0
 
+            # ЛИМИТ: 5 вакансий за цикл для каналов (не спамить!), 15 для юзеров в ЛС
+            user_limit = 5 if tid < 0 else 15
+
             async with semaphore:
                 try:
                     return await send_jobs_to_user(
-                        tid, fresh_jobs, user_filter=uf, limit=15
+                        tid, fresh_jobs, user_filter=uf, limit=user_limit
                     )
                 except asyncio.CancelledError:
                     raise
@@ -1516,7 +1525,7 @@ async def scheduled_check():
             f"sent={total_sent}, duration={elapsed:.1f}s"
         )
         
-        # ЗАПУСК АВТОПОСТИНГА В КАНАЛЫ
+        # ЗАПУСК АВТОПОСТИНГА В КАНАЛЫ (он больше не плодит дубли благодаря Foreign Key!)
         await post_jobs_to_channels()
 
     except asyncio.CancelledError:
@@ -1541,10 +1550,14 @@ async def main():
 
     try:
         loop = asyncio.get_running_loop()
-        loop.set_default_executor(ThreadPoolExecutor(max_workers=20)) # <--- УВЕЛИЧИЛИ ДО 20 РАБОЧИХ
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=20))
         logger.info("⚙️ Thread pool executor limited to 20 workers for Render stability.")
     except Exception as e:
         logger.warning(f"Failed to set custom thread pool executor: {e}")
+
+    # Принудительная разовая инициализация каналов сателлитов в БД на старте!
+    logger.info("📡 Running startup channel synchronization...")
+    await asyncio.to_thread(db_init_channels)
 
     s = AsyncIOScheduler(timezone="UTC")
     
