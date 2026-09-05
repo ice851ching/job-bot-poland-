@@ -147,7 +147,7 @@ UMOWY = [
 UMOWY_DISPLAY = {
     "umowa_o_prace": "Umowa o pracę",
     "umowa_zlecenie": "Umowa zlecenie",
-    "umowa_o_dzielo": "Umowa o dzieło",
+    "umowa_o_dzielo": "Umowa о dzieło",
     "b2b": "B2B",
     "staz": "Staż / Praktyki",
 }
@@ -266,7 +266,7 @@ TEXTS = {
             "nowych ofert, potwierdź, że nadal szukasz pracy! 👇"
         ),
         "btn_continue": "🔄 Kontynuuj wyszukiwanie",
-        "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowе oferty już wkrótce! 🚀",
+        "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowe oferty już wkrótce! 🚀",
     },
     "ua": {
         "welcome": (
@@ -644,7 +644,8 @@ def db_get_jobs_for_city(city, limit=150, hours=24):
                 .execute()
             return r.data or []
         except Exception as e:
-            if attempt < 2:
+            err_text = str(e)
+            if ("errno 11" in err_text.lower() or "temporarily unavailable" in err_text.lower()) and attempt < 2:
                 time.sleep(0.3 * (attempt + 1))
                 continue
             logger.error(f"db_get_jobs_for_city error: {e}")
@@ -761,8 +762,10 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
     async with get_user_lock(tid):
         sent, sf, ss, blocked = 0, 0, 0, 0
         
+        # Получаем историю отправки с предохранителем
         already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, tid)
         
+        # ЕСЛИ БЫЛ СБОЙ СЕТИ И БАЗА НЕ ОТВЕТИЛА — ПРОПУСКАЕМ ЮЗЕРА (НОЛЬ СПАМА ДУБЛЯМИ!)
         if already_sent_ids is None:
             logger.warning(f"⚠️ Skipping user {tid} in this cycle due to DB history fetch error.")
             return 0
@@ -1007,7 +1010,9 @@ async def run_broadcast(bot: Bot, admin_id: int, from_chat_id: int, message_id: 
 # ==================== VIP AUTOMATIC GITHUB TRIGGER ====================
 
 async def auto_trigger_github_scraper():
-    """Каждые 25 минут пинает GitHub через VIP API для мгновенного парсинга"""
+    """
+    Каждые 25 минут пинает GitHub через VIP API для мгновенного и точного парсинга по расписанию.
+    """
     if is_night_time():
         logger.info("🌙 Night time — skipping auto-trigger of GitHub Scraper.")
         return
@@ -1023,7 +1028,10 @@ async def auto_trigger_github_scraper():
 # ==================== AUTOMATIC BOT DESCRIPTION UPDATE ====================
 
 async def update_bot_description():
-    """Раз в час обновляет описание бота со свежей живой статистикой"""
+    """
+    Раз в час обновляет описание бота (What can this bot do?) в Telegram,
+    подставляя реальную статистику базы данных.
+    """
     try:
         stats = await asyncio.to_thread(db_get_bot_stats)
         total = stats.get("total", 0)
@@ -1510,7 +1518,7 @@ async def main():
         next_run_time=datetime.now(timezone.utc) + timedelta(seconds=20),
     )
     
-    # 3. Обновление описания бота раз в час
+    # 3. Автоматическое обновление описания бота раз в час
     s.add_job(
         update_bot_description,
         "interval",
@@ -1525,7 +1533,7 @@ async def main():
     
     s.start()
 
-    logger.info("⏰ Scheduler started: check in 10s, description in 15s, VIP scraper in 20s")
+    logger.info("⏰ Scheduler started: first check in 10s, VIP scraper trigger in 20s, then regular intervals")
 
     try:
         await dp.start_polling(bot)
