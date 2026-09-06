@@ -88,7 +88,7 @@ BTN_STOP = "⏹ Zatrzymaj"
 BTN_HELP = "ℹ️ Pomoc"
 BTN_RESTART = "🚀 Uruchom ponownie"
 
-# Временный лимит-трекер резюме (в памяти: user_id -> список timestamp генераций за 24 часа)
+# Временный лимит-трекер резюме (в памяти: user_id -> список timestamp генераций за последние 24 часа)
 CV_LIMIT_TRACKER = {}
 
 
@@ -746,7 +746,7 @@ def is_upload_allowed(user_id: int) -> bool:
     return True
 
 
-# ==================== WEB SERVER (УМНАЯ СИНХРОНИЗАЦИЯ) ====================
+# ==================== WEB SERVER (УМНАЯ СИНХРОНИЗАЦИЯ С СОВМЕСТИМОСТЬЮ CORS) ====================
 
 async def health_check(request):
     return web.Response(text="OK", status=200)
@@ -755,12 +755,12 @@ async def health_check(request):
 async def upload_cv_handler(request: web.Request):
     """
     Принимает Blob-файл напрямую с Netlify без левых файлообменников,
-    проверяет подпись Telegram и отправляет резюме напрямую в чат.
+    проверяет подпись Telegram, лимиты, и отправляет резюме напрямую в чат.
     """
     headers = {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Allow-Headers": "Content-Type, X-Requested-With",
     }
     
     if request.method == "OPTIONS":
