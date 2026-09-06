@@ -5,7 +5,9 @@ import re
 import time
 import hashlib
 import html
-import json  # Добавили стандартный импорт JSON для обработки WebApp-пакетов
+import json
+import hmac
+import urllib.parse
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor
@@ -17,7 +19,7 @@ from aiogram.types import (
     Message, CallbackQuery,
     InlineKeyboardMarkup, InlineKeyboardButton,
     ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
-    WebAppInfo, URLInputFile  # Добавлен URLInputFile для отправки документов по ссылкам
+    WebAppInfo, BufferedInputFile
 )
 from aiogram.filters import Command
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
@@ -86,6 +88,9 @@ BTN_STOP = "⏹ Zatrzymaj"
 BTN_HELP = "ℹ️ Pomoc"
 BTN_RESTART = "🚀 Uruchom ponownie"
 
+# Временный лимит-трекер резюме (в памяти: user_id -> список timestamp генераций за 24 часа)
+CV_LIMIT_TRACKER = {}
+
 
 class SetupStates(StatesGroup):
     lang = State()
@@ -145,7 +150,7 @@ UMOWY = [
     ("Umowa zlecenie", "umowa_zlecenie"),
     ("Umowa o dzieło", "umowa_o_dzielo"),
     ("B2B", "b2b"),
-    ("Staż / Praktyki", "staz"),
+    ("Staż / Praktyки", "staz"),
 ]
 
 UMOWY_DISPLAY = {
@@ -203,7 +208,7 @@ TEXTS = {
             f"<b>{BTN_RESET}</b> — настроить фильтры заново\n"
             f"<b>{BTN_STOP}</b> — остановить рассылку\n"
             f"<b>{BTN_HELP}</b> — эта справка\n"
-            "<b>#⃣ Создать резюме</b> — конструктор резюме с моментальным получением PDF в чат\n\n"
+            "<b>#⃣ Создать резюме</b> — конструктор резюме с моментальным получением PDF в чат (лимит: 3 резюме в день)\n\n"
             "По вопросам и сотрудничеству: @Hriaker1"
         ),
         "already_stopped": "ℹ️ Ты не подписан на вакансии. Нажми кнопку ниже чтобы начать.",
@@ -241,7 +246,7 @@ TEXTS = {
             "📋 Umowa: {umowa}\n\n"
             "🔍 Szukam ofert na OLX, Praca.pl i RocketJobs..."
         ),
-        "loading_city": "🔍 Szukam nowych ofert dla tego miasta...\nPoczekaj 30–60 sekund.",
+        "loading_city": "🔍 Szukam nowych ofert dla tego miasta...\nPoczekaj 30–60 секунд.",
         "no_jobs": "😔 Brak ofert. Sprawdzam co 15 min!",
         "menu_active": "🟢 Bot działa i szuka ofert. Przyciski poniżej 👇",
         "stop_donate": (
@@ -256,7 +261,7 @@ TEXTS = {
             f"<b>{BTN_RESET}</b> — ustaw filtry od nowa\n"
             f"<b>{BTN_STOP}</b> — zatrzymaj wysyłkę\n"
             f"<b>{BTN_HELP}</b> — ta pomoc\n"
-            "<b>#⃣ Stwórz CV</b> — kreator CV z natychmiastowym otrzymaniem pliku PDF w czacie\n\n"
+            "<b>#⃣ Stwórz CV</b> — kreator CV z bezpośrednim przesłaniem PDF (limit: 3 na dobę)\n\n"
             "Pytania i współpraca: @Hriaker1"
         ),
         "already_stopped": "ℹ️ Nie masz subskrypcji. Naciśnij przycisk poniżej.",
@@ -308,7 +313,7 @@ TEXTS = {
             f"<b>{BTN_RESET}</b> — налаштувати фільтри заново\n"
             f"<b>{BTN_STOP}</b> — зупинити розсилку\n"
             f"<b>{BTN_HELP}</b> — ця довідка\n"
-            "<b>#⃣ Створити резюме</b> — конструктор резюме з миттєвим отриманням PDF в чаті\n\n"
+            "<b>#⃣ Створити резюме</b> — конструктор резюме з миттєвим отриманням PDF в чаті (ліміт: 3 на день)\n\n"
             "Питання та співпраця: @Hriaker1"
         ),
         "already_stopped": "ℹ️ Ти не підписаний. Натисни кнопку нижче.",
@@ -697,10 +702,106 @@ async def wait_for_city_jobs(city: str, attempts: int = 10, delay: int = 6):
     return []
 
 
-# ==================== WEB SERVER ====================
+# ==================== SIGNATURE & ANTI-SPAM PROTECTION ====================
+
+def verify_telegram_webapp_data(init_data: str, token: str) -> dict:
+    """
+    Валидирует переданные initData от Telegram с помощью HMAC-SHA256,
+    гарантируя защиту от накрутки и взлома user_id.
+    """
+    try:
+        parsed = dict(urllib.parse.parse_qsl(init_data))
+        if "hash" not in parsed:
+            return {}
+        
+        data_hash = parsed.pop("hash")
+        sorted_keys = sorted(parsed.keys())
+        data_check_string = "\n".join([f"{k}={parsed[k]}" for k in sorted_keys])
+        
+        secret_key = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+        calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+        
+        if calculated_hash == data_hash:
+            return json.loads(parsed.get("user", "{}"))
+    except Exception as e:
+        logger.error(f"Error validating telegram initData: {e}")
+    return {}
+
+
+def is_upload_allowed(user_id: int) -> bool:
+    """
+    Проверяет лимит создания резюме (максимум 3 резюме в сутки).
+    """
+    now = datetime.now(timezone.utc)
+    if user_id not in CV_LIMIT_TRACKER:
+        CV_LIMIT_TRACKER[user_id] = []
+    
+    # Очищаем старые временные метки (старше 24 часов)
+    CV_LIMIT_TRACKER[user_id] = [t for t in CV_LIMIT_TRACKER[user_id] if now - t < timedelta(days=1)]
+    
+    if len(CV_LIMIT_TRACKER[user_id]) >= 3:
+        return False
+        
+    CV_LIMIT_TRACKER[user_id].append(now)
+    return True
+
+
+# ==================== WEB SERVER (УМНАЯ СИНХРОНИЗАЦИЯ) ====================
 
 async def health_check(request):
     return web.Response(text="OK", status=200)
+
+
+async def upload_cv_handler(request: web.Request):
+    """
+    Принимает Blob-файл напрямую с Netlify без левых файлообменников,
+    проверяет подпись Telegram и отправляет резюме напрямую в чат.
+    """
+    headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+    }
+    
+    if request.method == "OPTIONS":
+        return web.Response(status=200, headers=headers)
+        
+    try:
+        reader = await request.post()
+        init_data = reader.get("init_data")
+        file_field = reader.get("file")
+        filename = reader.get("filename", "CV_Resume.pdf")
+        
+        if not init_data or not file_field:
+            return web.json_response({"error": "missing_parameters"}, status=400, headers=headers)
+            
+        # Валидация сессии Telegram
+        user_data = verify_telegram_webapp_data(init_data, BOT_TOKEN)
+        if not user_data or "id" not in user_data:
+            return web.json_response({"error": "unauthorized"}, status=401, headers=headers)
+            
+        user_id = user_data["id"]
+        
+        # Защита от лимитов (макс 3 резюме в день)
+        if not is_upload_allowed(user_id):
+            return web.json_response({"error": "limit_exceeded"}, status=429, headers=headers)
+            
+        file_bytes = file_field.file.read()
+        doc = BufferedInputFile(file_bytes, filename=str(filename))
+        
+        lang = await asyncio.to_thread(get_user_lang, user_id)
+        msg_caption = {
+            "ru": "📄 <b>Ваше резюме успешно создано!</b>\nФайл прикреплен ниже 👇",
+            "pl": "📄 <b>Twoje CV zostało pomyślnie utworzone!</b>\nPlik znajduje się poniżej 👇",
+            "ua": "📄 <b>Ваше резюме успішно створено!</b>\nФайл прикріплено нижче 👇"
+        }.get(lang, "📄 <b>Ваше резюме готово!</b>")
+        
+        await bot.send_document(chat_id=user_id, document=doc, caption=msg_caption, parse_mode="HTML")
+        return web.json_response({"success": True}, headers=headers)
+        
+    except Exception as e:
+        logger.error(f"Error in upload_cv_handler: {e}")
+        return web.json_response({"error": str(e)}, status=500, headers=headers)
 
 
 async def start_web_server():
@@ -708,6 +809,9 @@ async def start_web_server():
     app.router.add_get("/", health_check)
     app.router.add_get("/ping", health_check)
     app.router.add_get("/health", health_check)
+    app.router.add_post("/api/upload_cv", upload_cv_handler)
+    app.router.add_options("/api/upload_cv", upload_cv_handler)
+    
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 8080))
@@ -1132,48 +1236,6 @@ def db_init_channels():
 
 
 # ==================== HANDLERS ====================
-
-@router.message(F.web_app_data)
-async def web_app_data_handler(m: Message):
-    """
-    Принимает закодированные в WebApp данные, скачивает сгенерированный 
-    мобильным устройством PDF и отправляет его пользователю в чат напрямую.
-    """
-    try:
-        data = json.loads(m.web_app_data.data)
-        action = data.get("action")
-        
-        if action == "send_pdf":
-            pdf_url = data.get("url")
-            filename = data.get("filename", "CV_Resume.pdf")
-            lang = await asyncio.to_thread(get_user_lang, m.from_user.id)
-            
-            loading_texts = {
-                "ru": "⏳ <i>Получаю твое резюме, сейчас пришлю файл...</i>",
-                "pl": "⏳ <i>Pobieram Twoje CV, zaraz wyślę plik...</i>",
-                "ua": "⏳ <i>Отримую твоє резюме, зараз надішлю файл...</i>"
-            }
-            
-            loading_msg = await m.answer(loading_texts.get(lang, loading_texts["ru"]), parse_mode="HTML")
-            
-            try:
-                doc = URLInputFile(pdf_url, filename=filename)
-                await bot.send_document(chat_id=m.chat.id, document=doc)
-            finally:
-                try:
-                    await bot.delete_message(chat_id=m.chat.id, message_id=loading_msg.message_id)
-                except Exception:
-                    pass
-    except Exception as e:
-        logger.error(f"Error handling web_app_data: {e}")
-        lang = await asyncio.to_thread(get_user_lang, m.from_user.id)
-        error_texts = {
-            "ru": "❌ Произошла ошибка при отправке файла.",
-            "pl": "❌ Wystąpił błąd podczas wysyłania pliku.",
-            "ua": "❌ Сталася помилка при надсиланні файлу."
-        }
-        await m.answer(error_texts.get(lang, error_texts["ru"]))
-
 
 @router.message(Command("admin"), F.from_user.id == ADMIN_ID)
 async def cmd_admin(m: Message, state: FSMContext):
