@@ -1123,7 +1123,7 @@ def kb_umowa():
 
 def kb_active_menu(lang="ru", tid=None):
     btn_cv_text = TEXTS.get(lang, TEXTS["ru"]).get("btn_cv", "#⃣ Создать резюме")
-    web_url = f"https://workcvapp.netlify.app/index.html?uid={tid}" if tid else "https://workcvapp.netlify.app/index.html"
+    web_url = f"https://myworkcvapp.netlify.app/index.html?uid={tid}" if tid else "https://myworkcvapp.netlify.app/index.html"
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_RESET), KeyboardButton(text=BTN_STOP)],
