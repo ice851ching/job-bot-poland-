@@ -246,7 +246,7 @@ TEXTS = {
             "📋 Umowa: {umowa}\n\n"
             "🔍 Szukam ofert na OLX, Praca.pl i RocketJobs..."
         ),
-        "loading_city": "🔍 Szukam nowych ofert dla tego miasta...\nPoczekaj 30–60 sekund.",
+        "loading_city": "🔍 Szukam nowych ofert dla tego miasta...\nPoczekaj 30–60 секунд.",
         "no_jobs": "😔 Brak ofert. Sprawdzam co 15 min!",
         "menu_active": "🟢 Bot działa i szuka ofert. Przyciski poniżej 👇",
         "stop_donate": (
@@ -278,7 +278,7 @@ TEXTS = {
             "nowych ofert, potwierdź, że nadal szukasz pracy! 👇"
         ),
         "btn_continue": "🔄 Kontynuuj wyszukiwanie",
-        "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowе oferty już wkrótce! 🚀",
+        "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowe oferty już wkrótce! 🚀",
         "btn_cv": "#⃣ Stwórz CV",
     },
     "ua": {
@@ -769,24 +769,53 @@ async def upload_cv_handler(request: web.Request):
     try:
         reader = await request.post()
         init_data = reader.get("init_data")
+        user_id_param = reader.get("user_id") or reader.get("uid")
         file_field = reader.get("file")
         filename = reader.get("filename", "CV_Resume.pdf")
         
-        if not init_data or not file_field:
+        if not file_field:
             return web.json_response({"error": "missing_parameters"}, status=400, headers=headers)
             
-        # Валидация сессии Telegram
-        user_data = verify_telegram_webapp_data(init_data, BOT_TOKEN)
-        if not user_data or "id" not in user_data:
+        user_id = None
+
+        # 1. Сначала пробуем валидацию крипто-подписи Telegram (если init_data передан)
+        if init_data:
+            user_data = verify_telegram_webapp_data(init_data, BOT_TOKEN)
+            if user_data and "id" in user_data:
+                user_id = user_data["id"]
+
+        # 2. Если init_data пустой, берем прямой user_id из query-параметра
+        if not user_id and user_id_param:
+            try:
+                user_id = int(str(user_id_param).strip())
+            except ValueError:
+                pass
+
+        if not user_id:
             return web.json_response({"error": "unauthorized"}, status=401, headers=headers)
             
-        user_id = user_data["id"]
-        
         # Защита от лимитов (макс 3 резюме в день)
         if not is_upload_allowed(user_id):
             return web.json_response({"error": "limit_exceeded"}, status=429, headers=headers)
             
-        file_bytes = file_field.file.read()
+        # Бронебойное чтение байтов
+        file_bytes = b""
+        if isinstance(file_field, web.FileField):
+            try:
+                file_bytes = file_field.file.read()
+            except Exception:
+                pass
+            if not file_bytes:
+                try:
+                    file_bytes = file_field.value
+                except Exception:
+                    pass
+        elif isinstance(file_field, (bytes, bytearray)):
+            file_bytes = bytes(file_field)
+            
+        if not file_bytes:
+            return web.json_response({"error": "empty_file"}, status=400, headers=headers)
+
         doc = BufferedInputFile(file_bytes, filename=str(filename))
         
         lang = await asyncio.to_thread(get_user_lang, user_id)
@@ -797,6 +826,7 @@ async def upload_cv_handler(request: web.Request):
         }.get(lang, "📄 <b>Ваше резюме готово!</b>")
         
         await bot.send_document(chat_id=user_id, document=doc, caption=msg_caption, parse_mode="HTML")
+        logger.info(f"✅ Резюме успешно доставлено юзеру {user_id}")
         return web.json_response({"success": True}, headers=headers)
         
     except Exception as e:
@@ -805,7 +835,7 @@ async def upload_cv_handler(request: web.Request):
 
 
 async def start_web_server():
-    app = web.Application()
+    app = web.Application(client_max_size=1024**2 * 50)
     app.router.add_get("/", health_check)
     app.router.add_get("/ping", health_check)
     app.router.add_get("/health", health_check)
@@ -1091,12 +1121,13 @@ def kb_umowa():
     ])
 
 
-def kb_active_menu(lang="ru"):
+def kb_active_menu(lang="ru", tid=None):
     btn_cv_text = TEXTS.get(lang, TEXTS["ru"]).get("btn_cv", "#⃣ Создать резюме")
+    web_url = f"https://workcvapp.netlify.app/index.html?uid={tid}" if tid else "https://workcvapp.netlify.app/index.html"
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_RESET), KeyboardButton(text=BTN_STOP)],
-            [KeyboardButton(text=BTN_HELP), KeyboardButton(text=btn_cv_text, web_app=WebAppInfo(url="https://workcvapp.netlify.app/"))],
+            [KeyboardButton(text=BTN_HELP), KeyboardButton(text=btn_cv_text, web_app=WebAppInfo(url=web_url))],
         ],
         resize_keyboard=True
     )
@@ -1307,6 +1338,17 @@ async def cmd_start(m: Message, state: FSMContext):
         logger.warning(f"cmd_start error for {m.from_user.id}: {e}")
 
 
+# ПРЯМАЯ КОМАНДА ДЛЯ МОМЕНТАЛЬНОГО ПОЛУЧЕНИЯ КНОПКИ РЕЗЮМЕ
+@router.message(Command("cv"))
+async def cmd_cv(m: Message, state: FSMContext):
+    try:
+        await state.clear()
+        lang = await asyncio.to_thread(get_user_lang, m.from_user.id)
+        await m.answer("🟢 Кнопка конструктора обновлена внизу 👇", reply_markup=kb_active_menu(lang, tid=m.from_user.id))
+    except Exception as e:
+        logger.warning(f"cmd_cv error: {e}")
+
+
 @router.message(Command("reset"))
 async def cmd_reset(m: Message, state: FSMContext):
     try:
@@ -1467,7 +1509,7 @@ async def on_umowa(c: CallbackQuery, state: FSMContext):
         await c.message.edit_text(t(lang, "saved", city=cd, etat=ed, umowa=ud))
         await c.answer()
 
-        await bot.send_message(c.from_user.id, t(lang, "menu_active"), reply_markup=kb_active_menu(lang))
+        await bot.send_message(c.from_user.id, t(lang, "menu_active"), reply_markup=kb_active_menu(lang, tid=c.from_user.id))
         await send_promo(c.from_user.id)
         await asyncio.sleep(1)
 
