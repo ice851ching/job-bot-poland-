@@ -65,7 +65,7 @@ DONATE_ACCOUNT = "84 9511 0000 0052 9681 3000 0010"
 
 PROMO_TEXT = (
     "💼 <b>Ищешь подработку с гибким графиком в Польше?</b>\n\n"
-    "Подключайся к доставке через <b>MB Partners</b> и выходи на заказы in "
+    "Подключайся к доставке через <b>MB Partners</b> и выходи на заказы в "
     "<b>Glovo / Uber Eats / Bolt Food</b>.\n\n"
     "Что по условиям:\n"
     "• свободный график — можно совмещать с учёбой или основной работой\n"
@@ -150,7 +150,7 @@ UMOWY = [
     ("Umowa zlecenie", "umowa_zlecenie"),
     ("Umowa o dzieło", "umowa_o_dzielo"),
     ("B2B", "b2b"),
-    ("Staż / Praktyки", "staz"),
+    ("Staż / Praktyki", "staz"),
 ]
 
 UMOWY_DISPLAY = {
@@ -710,14 +710,14 @@ def verify_telegram_webapp_data(init_data: str, token: str) -> dict:
     гарантируя защиту от накрутки и взлома user_id.
     """
     try:
-        # Пытаемся раскодировать URL-строку, если она пришла дважды закодированной
-        decoded_init_data = urllib.parse.unquote(init_data)
+        # Декодируем дважды закодированные строки
+        unquoted_data = urllib.parse.unquote(init_data)
         parsed = dict(urllib.parse.parse_qsl(init_data))
-        if not parsed:
-            parsed = dict(urllib.parse.parse_qsl(decoded_init_data))
+        if not parsed or "hash" not in parsed:
+            parsed = dict(urllib.parse.parse_qsl(unquoted_data))
             
         if "hash" not in parsed:
-            logger.warning("WebApp Validate: отсутствует хэш.")
+            logger.warning("WebApp Verification: Хэш не найден во входящих данных.")
             return {}
         
         data_hash = parsed.pop("hash")
@@ -728,9 +728,11 @@ def verify_telegram_webapp_data(init_data: str, token: str) -> dict:
         calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
         
         if calculated_hash == data_hash:
-            return json.loads(parsed.get("user", "{}"))
+            user_json = parsed.get("user", "{}")
+            logger.info(f"WebApp Verification: Успешно! Юзер: {user_json}")
+            return json.loads(user_json)
         else:
-            logger.warning(f"WebApp Validate: несовпадение хэша. Calc: {calculated_hash}, Got: {data_hash}")
+            logger.warning(f"WebApp Verification: Сбой хэша. Ожидался: {calculated_hash}, Получен: {data_hash}")
     except Exception as e:
         logger.error(f"Error validating telegram initData: {e}")
     return {}
@@ -754,7 +756,7 @@ def is_upload_allowed(user_id: int) -> bool:
     return True
 
 
-# ==================== WEB SERVER (С ДИНАМИЧЕСКИМ CORS И ЛИМИТОМ 50MB) ====================
+# ==================== WEB SERVER (СУПЕР-СОВМЕСТИМЫЙ И БРОНЕБОЙНЫЙ) ====================
 
 async def health_check(request):
     return web.Response(text="OK", status=200)
@@ -762,10 +764,9 @@ async def health_check(request):
 
 async def upload_cv_handler(request: web.Request):
     """
-    Принимает Blob-файл напрямую с Netlify,
+    Принимает Blob-файл напрямую с Netlify без левых файлообменников,
     проверяет подпись Telegram, лимиты, и отправляет резюме напрямую в чат.
     """
-    # Динамический CORS: берем Origin из запроса или разрешаем всё
     origin = request.headers.get("Origin", "*")
     headers = {
         "Access-Control-Allow-Origin": origin,
@@ -778,40 +779,62 @@ async def upload_cv_handler(request: web.Request):
         return web.Response(status=200, headers=headers)
         
     try:
+        logger.info("📩 Получен POST-запрос на /api/upload_cv")
         reader = await request.post()
+        
         init_data = reader.get("init_data")
         file_field = reader.get("file")
         filename = reader.get("filename", "CV_Resume.pdf")
         
-        if not init_data or not file_field:
-            logger.warning("Upload CV: пропущены обязательные параметры запроса.")
-            return web.json_response({"error": "missing_parameters"}, status=400, headers=headers)
+        if not init_data:
+            logger.warning("❌ Ошибка: Отсутствует параметр init_data в запросе")
+            return web.json_response({"error": "missing_init_data"}, status=400, headers=headers)
+            
+        if not file_field:
+            logger.warning("❌ Ошибка: Отсутствует параметр file в запросе")
+            return web.json_response({"error": "missing_file"}, status=400, headers=headers)
             
         # Валидация сессии Telegram
         user_data = verify_telegram_webapp_data(init_data, BOT_TOKEN)
         if not user_data or "id" not in user_data:
-            logger.warning("Upload CV: невалидная сессия Telegram.")
+            logger.warning("❌ Ошибка: Не удалось авторизовать пользователя Telegram")
             return web.json_response({"error": "unauthorized"}, status=401, headers=headers)
             
         user_id = user_data["id"]
         
         # Защита от лимитов (макс 3 резюме в день)
         if not is_upload_allowed(user_id):
-            logger.warning(f"Upload CV: превышен лимит для ID {user_id}")
+            logger.warning(f"❌ Ошибка: Превышен лимит создания резюме для юзера {user_id}")
             return web.json_response({"error": "limit_exceeded"}, status=429, headers=headers)
             
-        # БЕЗОПАСНОЕ ЧТЕНИЕ: Свойство .value в aiohttp уже содержит вычитанные байты файла
+        # БРОНЕБОЙНОЕ ЧТЕНИЕ ФАЙЛА (всеми известными науке путями)
+        file_bytes = b""
         if isinstance(file_field, web.FileField):
-            file_bytes = file_field.value
+            # Способ 1: Пытаемся прочесть напрямую через файловый поток .file.read()
+            try:
+                file_bytes = file_field.file.read()
+                logger.info(f"File read via stream successfully. Size: {len(file_bytes)} bytes")
+            except Exception as read_err:
+                logger.warning(f"Failed to read file via .file.read(): {read_err}")
+            
+            # Способ 2: Если пустой, забираем из свойства .value
+            if not file_bytes:
+                try:
+                    file_bytes = file_field.value
+                    logger.info(f"File read via .value successfully. Size: {len(file_bytes)} bytes")
+                except Exception as val_err:
+                    logger.warning(f"Failed to read file via .value: {val_err}")
         else:
+            # Способ 3: Если вдруг пришла строка или голые байты напрямую
             file_bytes = file_field
             if isinstance(file_bytes, str):
                 file_bytes = file_bytes.encode('utf-8')
-
-        if not file_bytes:
-            logger.error("Upload CV: файл пустой (0 байт)")
+            logger.info(f"Direct raw bytes read. Size: {len(file_bytes)} bytes")
+            
+        if not file_bytes or len(file_bytes) == 0:
+            logger.error("❌ Ошибка: Файл пришел абсолютно пустым (0 байт)")
             return web.json_response({"error": "empty_file"}, status=400, headers=headers)
-
+            
         doc = BufferedInputFile(file_bytes, filename=str(filename))
         
         lang = await asyncio.to_thread(get_user_lang, user_id)
@@ -822,16 +845,16 @@ async def upload_cv_handler(request: web.Request):
         }.get(lang, "📄 <b>Ваше резюме готово!</b>")
         
         await bot.send_document(chat_id=user_id, document=doc, caption=msg_caption, parse_mode="HTML")
-        logger.info(f"Upload CV: резюме отправлено пользователю {user_id}")
+        logger.info(f"✅ Файл {filename} ({len(file_bytes)} байт) успешно отправлен юзеру {user_id} в чат.")
         return web.json_response({"success": True}, headers=headers)
         
     except Exception as e:
-        logger.exception(f"Error in upload_cv_handler: {e}")
+        logger.exception(f"❌ Критическая ошибка в upload_cv_handler: {e}")
         return web.json_response({"error": str(e)}, status=500, headers=headers)
 
 
 async def start_web_server():
-    # Задаем максимальный размер тела запроса в 50 МБ (для тяжелых резюме с фото)
+    # Задаем лимит 50 МБ для возможности загрузки тяжелых фоток
     app = web.Application(client_max_size=1024**2 * 50)
     app.router.add_get("/", health_check)
     app.router.add_get("/ping", health_check)
@@ -844,7 +867,7 @@ async def start_web_server():
     port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logger.info(f"🌐 Web server started on port {port} (Max upload size: 50MB)")
+    logger.info(f"🌐 Web server started on port {port} (Max payload size: 50MB)")
 
 
 # ==================== FORMAT & SEND ====================
