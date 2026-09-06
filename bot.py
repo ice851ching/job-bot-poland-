@@ -278,7 +278,7 @@ TEXTS = {
             "nowych ofert, potwierdź, że nadal szukasz pracy! 👇"
         ),
         "btn_continue": "🔄 Kontynuuj wyszukiwanie",
-        "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowe oferty już wkrótce! 🚀",
+        "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowе oferty już wkrótce! 🚀",
         "btn_cv": "#⃣ Stwórz CV",
     },
     "ua": {
@@ -710,14 +710,8 @@ def verify_telegram_webapp_data(init_data: str, token: str) -> dict:
     гарантируя защиту от накрутки и взлома user_id.
     """
     try:
-        # Декодируем дважды закодированные строки
-        unquoted_data = urllib.parse.unquote(init_data)
         parsed = dict(urllib.parse.parse_qsl(init_data))
-        if not parsed or "hash" not in parsed:
-            parsed = dict(urllib.parse.parse_qsl(unquoted_data))
-            
         if "hash" not in parsed:
-            logger.warning("WebApp Verification: Хэш не найден во входящих данных.")
             return {}
         
         data_hash = parsed.pop("hash")
@@ -728,11 +722,7 @@ def verify_telegram_webapp_data(init_data: str, token: str) -> dict:
         calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
         
         if calculated_hash == data_hash:
-            user_json = parsed.get("user", "{}")
-            logger.info(f"WebApp Verification: Успешно! Юзер: {user_json}")
-            return json.loads(user_json)
-        else:
-            logger.warning(f"WebApp Verification: Сбой хэша. Ожидался: {calculated_hash}, Получен: {data_hash}")
+            return json.loads(parsed.get("user", "{}"))
     except Exception as e:
         logger.error(f"Error validating telegram initData: {e}")
     return {}
@@ -756,7 +746,7 @@ def is_upload_allowed(user_id: int) -> bool:
     return True
 
 
-# ==================== WEB SERVER (СУПЕР-СОВМЕСТИМЫЙ И БРОНЕБОЙНЫЙ) ====================
+# ==================== WEB SERVER (УМНАЯ СИНХРОНИЗАЦИЯ С СОВМЕСТИМОСТЬЮ CORS) ====================
 
 async def health_check(request):
     return web.Response(text="OK", status=200)
@@ -767,74 +757,36 @@ async def upload_cv_handler(request: web.Request):
     Принимает Blob-файл напрямую с Netlify без левых файлообменников,
     проверяет подпись Telegram, лимиты, и отправляет резюме напрямую в чат.
     """
-    origin = request.headers.get("Origin", "*")
     headers = {
-        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, X-Requested-With, Authorization",
-        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Headers": "Content-Type, X-Requested-With",
     }
     
     if request.method == "OPTIONS":
         return web.Response(status=200, headers=headers)
         
     try:
-        logger.info("📩 Получен POST-запрос на /api/upload_cv")
         reader = await request.post()
-        
         init_data = reader.get("init_data")
         file_field = reader.get("file")
         filename = reader.get("filename", "CV_Resume.pdf")
         
-        if not init_data:
-            logger.warning("❌ Ошибка: Отсутствует параметр init_data в запросе")
-            return web.json_response({"error": "missing_init_data"}, status=400, headers=headers)
-            
-        if not file_field:
-            logger.warning("❌ Ошибка: Отсутствует параметр file в запросе")
-            return web.json_response({"error": "missing_file"}, status=400, headers=headers)
+        if not init_data or not file_field:
+            return web.json_response({"error": "missing_parameters"}, status=400, headers=headers)
             
         # Валидация сессии Telegram
         user_data = verify_telegram_webapp_data(init_data, BOT_TOKEN)
         if not user_data or "id" not in user_data:
-            logger.warning("❌ Ошибка: Не удалось авторизовать пользователя Telegram")
             return web.json_response({"error": "unauthorized"}, status=401, headers=headers)
             
         user_id = user_data["id"]
         
         # Защита от лимитов (макс 3 резюме в день)
         if not is_upload_allowed(user_id):
-            logger.warning(f"❌ Ошибка: Превышен лимит создания резюме для юзера {user_id}")
             return web.json_response({"error": "limit_exceeded"}, status=429, headers=headers)
             
-        # БРОНЕБОЙНОЕ ЧТЕНИЕ ФАЙЛА (всеми известными науке путями)
-        file_bytes = b""
-        if isinstance(file_field, web.FileField):
-            # Способ 1: Пытаемся прочесть напрямую через файловый поток .file.read()
-            try:
-                file_bytes = file_field.file.read()
-                logger.info(f"File read via stream successfully. Size: {len(file_bytes)} bytes")
-            except Exception as read_err:
-                logger.warning(f"Failed to read file via .file.read(): {read_err}")
-            
-            # Способ 2: Если пустой, забираем из свойства .value
-            if not file_bytes:
-                try:
-                    file_bytes = file_field.value
-                    logger.info(f"File read via .value successfully. Size: {len(file_bytes)} bytes")
-                except Exception as val_err:
-                    logger.warning(f"Failed to read file via .value: {val_err}")
-        else:
-            # Способ 3: Если вдруг пришла строка или голые байты напрямую
-            file_bytes = file_field
-            if isinstance(file_bytes, str):
-                file_bytes = file_bytes.encode('utf-8')
-            logger.info(f"Direct raw bytes read. Size: {len(file_bytes)} bytes")
-            
-        if not file_bytes or len(file_bytes) == 0:
-            logger.error("❌ Ошибка: Файл пришел абсолютно пустым (0 байт)")
-            return web.json_response({"error": "empty_file"}, status=400, headers=headers)
-            
+        file_bytes = file_field.file.read()
         doc = BufferedInputFile(file_bytes, filename=str(filename))
         
         lang = await asyncio.to_thread(get_user_lang, user_id)
@@ -845,17 +797,15 @@ async def upload_cv_handler(request: web.Request):
         }.get(lang, "📄 <b>Ваше резюме готово!</b>")
         
         await bot.send_document(chat_id=user_id, document=doc, caption=msg_caption, parse_mode="HTML")
-        logger.info(f"✅ Файл {filename} ({len(file_bytes)} байт) успешно отправлен юзеру {user_id} в чат.")
         return web.json_response({"success": True}, headers=headers)
         
     except Exception as e:
-        logger.exception(f"❌ Критическая ошибка в upload_cv_handler: {e}")
+        logger.error(f"Error in upload_cv_handler: {e}")
         return web.json_response({"error": str(e)}, status=500, headers=headers)
 
 
 async def start_web_server():
-    # Задаем лимит 50 МБ для возможности загрузки тяжелых фоток
-    app = web.Application(client_max_size=1024**2 * 50)
+    app = web.Application()
     app.router.add_get("/", health_check)
     app.router.add_get("/ping", health_check)
     app.router.add_get("/health", health_check)
@@ -867,7 +817,7 @@ async def start_web_server():
     port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logger.info(f"🌐 Web server started on port {port} (Max payload size: 50MB)")
+    logger.info(f"🌐 Web server started on port {port}")
 
 
 # ==================== FORMAT & SEND ====================
