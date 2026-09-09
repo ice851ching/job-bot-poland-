@@ -7,6 +7,7 @@ import re
 import argparse
 import random
 import time
+import urllib.parse  # Добавлен импорт для экранирования URL
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -17,6 +18,7 @@ load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+CF_WORKER_URL = os.getenv("CF_WORKER_URL")  # Читаем адрес Cloudflare воркера
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -144,13 +146,36 @@ def fetch_url(url: str, impersonate_target: str = "chrome120", referer: str = No
 TARGET_BROWSERS = ["chrome120", "chrome110", "edge101", "safari_mac_12_0"]
 
 def fetch_url_with_retry(url: str, referer: str = None):
+    # 1. Пробуем получить страницу стандартным бронебойным путем (через curl_cffi)
     for browser in TARGET_BROWSERS:
         status, html = fetch_url(url, browser, referer)
+        if status == 200 and html:
+            return status, html
         if status == 403:
             logger.warning(f"Got 403 with {browser} for {url}. Retrying with next profile...")
             time.sleep(1.0)
             continue
-        return status, html
+        # Если статус не 403 и не 200 (например, 500 или 404), выходим
+        if status != 0:
+            return status, html
+            
+    # 2. АВАРИЙНЫЙ РЕЖИМ (ПЛАН Б): Если все браузеры поймали 403 (блокировка IP), задействуем Cloudflare Worker
+    if CF_WORKER_URL:
+        try:
+            logger.warning(f"🚨 АВАРИЙНЫЙ РЕЖИМ: IP заблокирован. Пробуем пробить через Cloudflare Worker для {url}")
+            encoded_url = urllib.parse.quote(url, safe='')
+            worker_target_url = f"{CF_WORKER_URL}?url={encoded_url}"
+            
+            # Делаем запрос к нашему прокси-воркеру
+            status, html = fetch_url(worker_target_url, "chrome120")
+            if status == 200 and html:
+                logger.info(f"✅ Cloudflare Worker успешно пробил блокировку для {url}!")
+                return 200, html
+            else:
+                logger.error(f"❌ Cloudflare Worker тоже вернул ошибку: {status}")
+        except Exception as e:
+            logger.error(f"❌ Критическая ошибка аварийного шлюза Cloudflare Worker: {e}")
+
     return 403, ""
 
 
@@ -396,11 +421,6 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
 
 
 async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
-    """
-    Абсолютно неубиваемый парсер RocketJobs.pl.
-    Ищет карточки по тегу a.offer-card и парсит город через иконку map-pin, а зарплату через Regex.
-    Полная независимость от динамических MUI-классов!
-    """
     try:
         slug = get_city_slug(city)
         if not slug:
@@ -468,26 +488,23 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                             continue
                         existing_ids.add(ext_id)
 
-                    # 3. Извлекаем город через иконку svg.lucide-map-pin (неубиваемый семантический путь!)
+                    # 3. Извлекаем город через иконку svg.lucide-map-pin
                     job_city = city
                     pin_icon = card.select_one("svg.lucide-map-pin")
                     if pin_icon:
-                        # Поднимаемся до контейнера (Box или Stack), держащего иконку и город
                         container = pin_icon.find_parent(class_=re.compile(r"MuiStack|MuiBox|mui-"))
                         if container:
                             loc_text = strip_html(container.get_text(" ", strip=True))
                             if loc_text:
-                                # Очищаем "Toruń , +4 Lokalizacje" -> "Toruń"
                                 job_city = loc_text.split(",")[0].split()[0].replace(",", "").strip()
 
                     if not city_matches(job_city, city):
                         continue
 
-                    # 4. Извлекаем зарплату через Regex (находим цифры + PLN/zł/EUR, игнорируя mui-хеш классы)
+                    # 4. Извлекаем зарплату через Regex
                     card_full_text = card.get_text(" ", strip=True)
                     salary = None
                     if "nieujawnione" not in card_full_text.lower():
-                        # Ищет одиночные суммы и диапазоны типа: "3 500 - 10 500 PLN/mies." или "6 000 zł"
                         sal_match = re.search(r"(\d[\d\s]*(?:\s*[-–]\s*\d[\d\s]*)?\s*(?:PLN|zł|EUR)(?:/[a-zA-Zа-яА-Я]+)*)", card_full_text, re.IGNORECASE)
                         if sal_match:
                             salary = strip_html(sal_match.group(0))
