@@ -405,7 +405,7 @@ def normalize_etat(etat):
     e = str(etat).lower().strip()
     if any(x in e for x in ["part", "niepełny", "niepelny", "1/2", "3/4", "1/4", "pół etatu", "pol etatu", "dodatkowa"]):
         return "part"
-    if any(x in e for x in ["full", "pełny", "pelny", "pełен", "pelen", "cały etat", "caly etat"]):
+    if any(x in e for x in ["full", "pełny", "pelny", "pełеn", "pelen", "cały etat", "caly etat"]):
         return "full"
     return None
 
@@ -1697,6 +1697,92 @@ async def scheduled_check():
         )
 
 
+# ==================== АВТОМАТИЧЕСКАЯ ОЧИСТКА БАЗЫ ДАННЫХ И ИСТОРИИ ОТПРАВКИ ====================
+
+async def db_cleanup_database():
+    """
+    Ежедневная асинхронная очистка базы данных Supabase от устаревших вакансий и логов истории отправки.
+    - Обычные вакансии (OLX, Praca.pl и др.) и история их отправки удаляются через 3 дня.
+    - Вакансии RocketJobs и история их отправки хранятся дольше и удаляются только через 30 дней.
+    """
+    logger.info("🗑 Запуск планировщика очистки базы данных от устаревших данных...")
+    try:
+        now = datetime.now(timezone.utc)
+        cutoff_standard = (now - timedelta(days=3)).isoformat()
+        cutoff_rocket = (now - timedelta(days=30)).isoformat()
+
+        # 1. Сбор ID обычных вакансий (OLX, Praca.pl), созданных более 3 дней назад
+        offset = 0
+        page_size = 1000
+        standard_ids = []
+        while True:
+            r = await asyncio.to_thread(
+                lambda: supabase.table("jobs")
+                .select("id")
+                .neq("source", "RocketJobs")
+                .lt("created_at", cutoff_standard)
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            if not r or not r.data:
+                break
+            standard_ids.extend([row["id"] for row in r.data])
+            if len(r.data) < page_size:
+                break
+            offset += page_size
+
+        # 2. Сбор ID вакансий RocketJobs, созданных более 30 дней назад
+        offset = 0
+        rocket_ids = []
+        while True:
+            r = await asyncio.to_thread(
+                lambda: supabase.table("jobs")
+                .select("id")
+                .eq("source", "RocketJobs")
+                .lt("created_at", cutoff_rocket)
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            if not r or not r.data:
+                break
+            rocket_ids.extend([row["id"] for row in r.data])
+            if len(r.data) < page_size:
+                break
+            offset += page_size
+
+        total_old_ids = standard_ids + rocket_ids
+
+        if total_old_ids:
+            logger.info(f"🗑 Найдено {len(total_old_ids)} устаревших вакансий для полной очистки.")
+            
+            # 1. Очищаем логи отправки (sent_jobs) пакетами по 100
+            for i in range(0, len(total_old_ids), 100):
+                batch = total_old_ids[i:i+100]
+                await asyncio.to_thread(
+                    lambda: supabase.table("sent_jobs")
+                    .delete()
+                    .in_("job_id", batch)
+                    .execute()
+                )
+            logger.info("✅ Устаревшая история отправки (sent_jobs) успешно очищена.")
+
+            # 2. Удаляем сами вакансии из таблицы jobs пакетами по 100
+            for i in range(0, len(total_old_ids), 100):
+                batch = total_old_ids[i:i+100]
+                await asyncio.to_thread(
+                    lambda: supabase.table("jobs")
+                    .delete()
+                    .in_("id", batch)
+                    .execute()
+                )
+            logger.info("✅ Устаревшие вакансии успешно удалены из таблицы jobs.")
+        else:
+            logger.info("✅ База данных чиста. Нет устаревших вакансий для удаления.")
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка во время выполнения db_cleanup_database: {e}")
+
+
 # ==================== MAIN ====================
 
 async def main():
@@ -1754,10 +1840,23 @@ async def main():
         misfire_grace_time=300,
         next_run_time=datetime.now(timezone.utc) + timedelta(seconds=15),
     )
+
+    # 4. ЕЖЕДНЕВНАЯ автоматическая очистка базы данных от старья в 03:00 по UTC
+    s.add_job(
+        db_cleanup_database,
+        "cron",
+        hour=3,
+        minute=0,
+        id="database_cleanup",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=600,
+    )
     
     s.start()
 
-    logger.info("⏰ Scheduler started: first check in 10s, VIP scraper trigger in 20s, then regular intervals")
+    logger.info("⏰ Scheduler started: first check in 10s, VIP scraper trigger in 20s, db cleanup daily at 03:00 UTC")
 
     try:
         await dp.start_polling(bot)
