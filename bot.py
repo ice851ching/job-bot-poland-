@@ -136,12 +136,14 @@ CITY_SLUGS = {
 }
 
 # ==================== КАРТА КАНАЛОВ ДЛЯ АВТОПОСТИНГА ====================
+# Перевели на гибкий формат настроек (поддерживает топики форумов и лимиты)
 CHANNELS_MAPPING = {
-    "Lublin": -1004402210524,       # @Praca_Lublin
-    "Białystok": -1004359303051,    # @Praca_Belostok
-    "Radom": -1003797919409,        # @Praca_Radom
-    "Częstochowa": -1004372087006,  # @Praca_Czestochowa
-    "Gdynia": -1004432735605        # @Praca_w_Gdynie
+    "Lublin": {"id": -1004402210524, "limit": 5},       # @Praca_Lublin
+    "Białystok": {"id": -1004359303051, "limit": 5},    # @Praca_Belostok
+    "Radom": {"id": -1003797919409, "limit": 5},        # @Praca_Radom
+    "Częstochowa": {"id": -1004372087006, "limit": 5},  # @Praca_Czestochowa
+    "Gdynia": {"id": -1004432735605, "limit": 5},       # @Praca_w_Gdynie
+    "Poznań": {"id": -1001716517416, "limit": 3, "thread_id": 81854} # Ветка 81854 в Познани
 }
 
 UMOWY = [
@@ -150,7 +152,7 @@ UMOWY = [
     ("Umowa zlecenie", "umowa_zlecenie"),
     ("Umowa o dzieło", "umowa_o_dzielo"),
     ("B2B", "b2b"),
-    ("Staż / Praktyki", "staz"),
+    ("Staż / Praktyки", "staz"),
 ]
 
 UMOWY_DISPLAY = {
@@ -821,7 +823,7 @@ async def upload_cv_handler(request: web.Request):
         lang = await asyncio.to_thread(get_user_lang, user_id)
         msg_caption = {
             "ru": "📄 <b>Ваше резюме успешно создано!</b>\nФайл прикреплен ниже 👇",
-            "pl": "📄 <b>Twoje CV zostało pomyślnie utworzone!</b>\nPlik znajduje się poniżej 👇",
+            "pl": "📄 <b>Twoje CV zostało pomyślnie utworzone!</b>\nPlik znajduje sich poniżej 👇",
             "ua": "📄 <b>Ваше резюме успішно створено!</b>\nФайл прикріплено нижче 👇"
         }.get(lang, "📄 <b>Ваше резюме готово!</b>")
         
@@ -1025,57 +1027,71 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
 async def post_jobs_to_channels():
     """
     Фоновая задача автопостинга свежих вакансий в Telegram-каналы сателлиты.
-    Отсылает по 5 самых свежих вакансий за один цикл, с паузой в 3 сек.
     """
     logger.info("📢 Starting channel auto-posting process...")
-    for city, channel in CHANNELS_MAPPING.items():
+    for city, config in CHANNELS_MAPPING.items():
         try:
+            # Извлекаем параметры конфигурации каждого канала
+            channel_id = config["id"]
+            limit = config.get("limit", 5)
+            thread_id = config.get("thread_id", None)
+
             # Сначала ОБЯЗАТЕЛЬНО регистрируем канал в таблице users,
             # чтобы удовлетворить ограничение внешнего ключа (Foreign Key) в sent_jobs.
-            await asyncio.to_thread(db_upsert_user, channel, f"Channel_{city}")
+            await asyncio.to_thread(db_upsert_user, channel_id, f"Channel_{city}")
 
             # Забираем вакансии за последние 2 часа (СВЕЖАК!), убирая отправку старья
             jobs = await asyncio.to_thread(db_get_jobs_for_city, city, limit=50, hours=2)
             if not jobs:
                 continue
 
-            already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, channel)
+            already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, channel_id)
             if already_sent_ids is None:
                 continue
 
             sent_count = 0
             sent_job_ids_batch = []
+            skipped_job_ids_batch = []
 
+            # 1. Сначала отфильтровываем дубликаты
+            new_jobs = []
             for job in reversed(jobs):
-                if sent_count >= 5:  # Максимум 5 постов за 15 минут в один канал
-                    break
-
                 job_id = job.get("id")
                 if job_id is None or job_id in already_sent_ids:
                     continue
-
                 if is_invalid_olx_url(job.get("url")) or is_delivery_job(job):
                     continue
+                new_jobs.append(job)
 
-                try:
-                    await bot.send_message(
-                        chat_id=channel,
-                        text=format_job(job),
-                        parse_mode="HTML",
-                        disable_web_page_preview=True
-                    )
-                    sent_job_ids_batch.append(job_id)
-                    already_sent_ids.add(job_id)
-                    sent_count += 1
-                    
-                    await asyncio.sleep(3.0)
-                except Exception as post_error:
-                    logger.error(f"Failed to send post to channel {channel}: {post_error}")
-                    break
+            # 2. Идем по списку уникальных свежих вакансий
+            for job in new_jobs:
+                job_id = job["id"]
+                if sent_count < limit:
+                    # Отправляем только до достижения лимита
+                    try:
+                        await bot.send_message(
+                            chat_id=channel_id,
+                            text=format_job(job),
+                            parse_mode="HTML",
+                            disable_web_page_preview=True,
+                            message_thread_id=thread_id
+                        )
+                        sent_job_ids_batch.append(job_id)
+                        already_sent_ids.add(job_id)
+                        sent_count += 1
+                        await asyncio.sleep(3.0)
+                    except Exception as post_error:
+                        logger.error(f"Failed to send post to channel {channel_id}: {post_error}")
+                        break
+                else:
+                    # Остальные помечаем как "отправленные" (записываем в базу, чтобы не всплывали в следующем цикле)
+                    skipped_job_ids_batch.append(job_id)
 
-            if sent_job_ids_batch:
-                await asyncio.to_thread(db_mark_sent_batch, channel, sent_job_ids_batch)
-                logger.info(f"📢 Posted {sent_count} new vacancies into channel: {channel}")
+            # 3. Фиксируем и отправленные, и пропущенные вакансии в Supabase
+            all_to_mark = sent_job_ids_batch + skipped_job_ids_batch
+            if all_to_mark:
+                await asyncio.to_thread(db_mark_sent_batch, channel_id, all_to_mark)
+                logger.info(f"📢 Posted {sent_count} jobs and skipped {len(skipped_job_ids_batch)} jobs into channel/topic: {channel_id}")
 
         except Exception as city_error:
             logger.error(f"Error in channel posting for city {city}: {city_error}")
@@ -1152,9 +1168,16 @@ async def run_broadcast(bot: Bot, admin_id: int, from_chat_id: int, message_id: 
     sent_channels, failed_channels = 0, 0
     
     logger.info("📢 Copying broadcast post to all satellite channels...")
-    for city, channel_id in CHANNELS_MAPPING.items():
+    for city, config in CHANNELS_MAPPING.items():
         try:
-            await bot.copy_message(chat_id=channel_id, from_chat_id=from_chat_id, message_id=message_id)
+            channel_id = config["id"]
+            thread_id = config.get("thread_id", None)
+            await bot.copy_message(
+                chat_id=channel_id, 
+                from_chat_id=from_chat_id, 
+                message_id=message_id,
+                message_thread_id=thread_id
+            )
             sent_channels += 1
             await asyncio.sleep(1.0)
         except Exception as e:
@@ -1241,8 +1264,9 @@ def db_init_channels():
     а парсер на Гитхабе ВСЕГДА видит и сканирует их города 24/7!
     """
     logger.info("📡 Initializing satellite channels in database...")
-    for city, channel_id in CHANNELS_MAPPING.items():
+    for city, config in CHANNELS_MAPPING.items():
         try:
+            channel_id = config["id"]
             # 1. Регистрируем канал в таблице users
             supabase.table("users").upsert(
                 {"telegram_id": channel_id, "username": f"Channel_{city}", "is_active": True},
