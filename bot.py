@@ -136,7 +136,6 @@ CITY_SLUGS = {
 }
 
 # ==================== КАРТА КАНАЛОВ ДЛЯ АВТОПОСТИНГА ====================
-# Перевели на гибкий формат настроек (поддерживает топики форумов и лимиты)
 CHANNELS_MAPPING = {
     "Lublin": {"id": -1004402210524, "limit": 5},       # @Praca_Lublin
     "Białystok": {"id": -1004359303051, "limit": 5},    # @Praca_Belostok
@@ -407,7 +406,7 @@ def normalize_etat(etat):
     e = str(etat).lower().strip()
     if any(x in e for x in ["part", "niepełny", "niepelny", "1/2", "3/4", "1/4", "pół etatu", "pol etatu", "dodatkowa"]):
         return "part"
-    if any(x in e for x in ["full", "pełny", "pelny", "pełеn", "pelen", "cały etat", "caly etat"]):
+    if any(x in e for x in ["full", "pełny", "pelny", "pełen", "pelen", "cały etat", "caly etat"]):
         return "full"
     return None
 
@@ -823,7 +822,7 @@ async def upload_cv_handler(request: web.Request):
         lang = await asyncio.to_thread(get_user_lang, user_id)
         msg_caption = {
             "ru": "📄 <b>Ваше резюме успешно создано!</b>\nФайл прикреплен ниже 👇",
-            "pl": "📄 <b>Twoje CV zostało pomyślnie utworzone!</b>\nPlik znajduje sich poniżej 👇",
+            "pl": "📄 <b>Twoje CV zostało pomyślnie utworzone!</b>\nPlik znajduje się poniżej 👇",
             "ua": "📄 <b>Ваше резюме успішно створено!</b>\nФайл прикріплено нижче 👇"
         }.get(lang, "📄 <b>Ваше резюме готово!</b>")
         
@@ -1585,9 +1584,13 @@ async def scheduled_check():
 
         for f in filters:
             tid = f["telegram_id"]
+            
+            # ИСКЛЮЧАЕМ ГРУППЫ И КАНАЛЫ ИЗ ОБЩЕЙ РАССЫЛКИ ЛЮДЯМ (они шлются только через автопостинг)
+            if tid < 0:
+                continue
+
             last_renewal_str = f.get("last_renewal")
 
-            # Каналы (отрицательные ID) никогда не уходят в 3-дневную заморозку!
             if last_renewal_str and tid > 0:
                 try:
                     last_renewal = datetime.fromisoformat(
