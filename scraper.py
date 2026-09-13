@@ -227,21 +227,6 @@ async def db_insert_jobs_batch(jobs_list: list) -> int:
     return await asyncio.to_thread(db_insert_jobs_batch_sync, jobs_list)
 
 
-def cleanup_old_jobs():
-    try:
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
-        old = supabase.table("jobs").select("id").lt("created_at", cutoff).execute()
-        if old.data:
-            old_ids = [j["id"] for j in old.data]
-            logger.info(f"🗑 Cleaning {len(old_ids)} old jobs")
-            for i in range(0, len(old_ids), 100):
-                supabase.table("sent_jobs").delete().in_("job_id", old_ids[i:i + 100]).execute()
-            supabase.table("jobs").delete().lt("created_at", cutoff).execute()
-            logger.info("✅ Cleaned old jobs")
-    except Exception as e:
-        logger.error(f"cleanup_old_jobs error: {e}")
-
-
 def get_active_cities_from_db() -> list:
     """
     Выбирает города активных юзеров, и ГАРАНТИРОВАННО добавляет города твоих каналов,
@@ -553,13 +538,8 @@ async def main():
     parser.add_argument("--city", type=str, default=None)
     args = parser.parse_args()
 
-    # ПОЛНОСТЬЮ убрали проверку ночного режима — скрейпер пашет круглосуточно 24/7!
-    try:
-        lt = datetime.now(ZoneInfo("Europe/Warsaw"))
-        if not args.city and lt.hour == 8 and lt.minute < 35:
-            cleanup_old_jobs()
-    except Exception:
-        pass
+    # Очистка базы полностью передана боту (крон 03:00 UTC в bot.py).
+    # Парсер работает как спецназ: залетел ➔ собрал свежак ➔ ушёл.
 
     existing_ids = get_all_existing_ids()
     cities = [args.city] if args.city else (get_active_cities_from_db() or MAIN_SCAN_CITIES[:5])
