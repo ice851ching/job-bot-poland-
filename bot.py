@@ -886,13 +886,13 @@ def format_job(job):
     quote_content = "\n".join(details)
     
     url = job.get('url', '')
-    url_line = f"🔗 <a href='{html.escape(url)}'>Открыть вакансию</a>" if url else ""
+    url_line = f"🔗 <a href='{html.escape(url)}'>Zobacz ofertę</a>" if url else ""
 
     message = (
         f"💼 <b>{title}</b>\n\n"
         f"<blockquote>{quote_content}</blockquote>\n\n"
         f"{url_line}\n\n"
-        f"🤖 <a href='https://t.me/szukam_pracy_bot'>@szukam_pracy_bot</a> — свежие вакансии в <a href='https://t.me/szukam_pracy_bot'>Польше 🇵🇱</a>"
+        f"🤖 <a href='https://t.me/szukam_pracy_bot'>@szukam_pracy_bot</a> — Świeże oferty pracy w <a href='https://t.me/szukam_pracy_bot'>Polsce 🇵🇱</a>"
     )
 
     return message.strip()
