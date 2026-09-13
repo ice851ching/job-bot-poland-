@@ -26,7 +26,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Города твоих Telegram-каналов (парсер будет шерстить их ВСЕГДА!)
-CHANNEL_CITIES = ["Lublin", "Białystok", "Radom", "Częstochowa", "Gdynia"]
+CHANNEL_CITIES = [
+    "Lublin", "Białystok", "Radom", "Częstochowa", "Gdynia",
+    "Poznań", "Zielona Góra", "Bydgoszcz"
+]
 
 MAIN_SCAN_CITIES = [
     "Warszawa", "Kraków", "Wrocław", "Poznań", "Gdańsk",
