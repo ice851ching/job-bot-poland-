@@ -25,7 +25,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Города твоих Telegram-каналов (парсер будет шерстить их ВСЕГДА!)
+# Города твоих Telegram-каналов (парсер будет шерстить их ВСЕГВА!)
 CHANNEL_CITIES = [
     "Lublin", "Białystok", "Radom", "Częstochowa", "Gdynia",
     "Poznań", "Zielona Góra", "Bydgoszcz"
@@ -36,7 +36,7 @@ MAIN_SCAN_CITIES = [
     "Łódź", "Katowice", "Lublin", "Toruń", "Szczecin",
     "Bydgoszcz", "Gdynia", "Białystok", "Rzeszów",
     "Kielce", "Gliwice", "Zabrze", "Olsztyn", "Opole",
-    "Częstochowa", "Radom"
+    "Częstochowa", "Radom", "Zielona Góra"
 ]
 
 CITY_SLUGS = {
@@ -235,14 +235,18 @@ def get_active_cities_from_db() -> list:
     try:
         r = supabase.table("user_filters").select("city").eq("is_paused", False).execute()
         cities = {row["city"] for row in r.data if row.get("city")}
+        
+        # Если кто-то ищет во всей Польше, берем полный базовый список городов
         if "all" in cities:
-            return MAIN_SCAN_CITIES
+            final_cities = set(MAIN_SCAN_CITIES)
+        else:
+            final_cities = cities
             
-        # Гарантированно добавляем города каналов в скан-лист
+        # Гарантированно добавляем города каналов в скан-лист, даже если сработал режим "all"
         for c in CHANNEL_CITIES:
-            cities.add(c)
+            final_cities.add(c)
             
-        return list(cities)
+        return list(final_cities)
     except Exception as e:
         logger.error(f"get_active_cities_from_db: {e}")
         return CHANNEL_CITIES
