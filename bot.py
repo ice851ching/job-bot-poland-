@@ -142,7 +142,8 @@ CHANNELS_MAPPING = {
     "Radom": {"id": -1003797919409, "limit": 5},        # @Praca_Radom
     "Częstochowa": {"id": -1004372087006, "limit": 5},  # @Praca_Czestochowa
     "Gdynia": {"id": -1004432735605, "limit": 5},       # @Praca_w_Gdynie
-    "Poznań": {"id": -1001716517416, "limit": 3, "thread_id": 81854} # Ветка 81854 в Познани
+    "Poznań": {"id": -1001716517416, "limit": 3, "thread_id": 81854}, # Ветка 81854 в Познани
+    "Zielona Góra": {"id": -1002854087046, "limit": 5, "thread_id": 4} # Ветка 4 в Зелена-Гура @CommunityZG
 }
 
 UMOWY = [
@@ -318,7 +319,7 @@ TEXTS = {
             "Питання та співпраця: @Hriaker1"
         ),
         "already_stopped": "ℹ️ Ти не підписаний. Натисни кнопку нижче.",
-        "btn_all": "🇵🇱 Вся Польща",
+        "btn_all": "🇵🇱 Вся Польша",
         "btn_custom": "✏️ Своє місто",
         "btn_done": "✅ Готово",
         "after_initial": (
