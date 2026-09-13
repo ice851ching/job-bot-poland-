@@ -142,8 +142,7 @@ CHANNELS_MAPPING = {
     "Radom": {"id": -1003797919409, "limit": 5},                           # @Praca_Radom
     "Częstochowa": {"id": -1004372087006, "limit": 5},                     # @Praca_Czestochowa
     "Gdynia": {"id": -1004432735605, "limit": 5},                          # @Praca_w_Gdynie
-    "Poznań": {"id": -1001716517416, "limit": 3, "thread_id": 81854},     # Ветка 81854 в Познани
-    "Zielona Góra": {"id": -1002854087046, "limit": 5, "thread_id": 4},    # Ветка 4 в Зелена-Гура @CommunityZG
+    "Poznań": {"id": -1001716517416, "limit": 3, "thread_id": 81854},    # Ветка познань
     "Bydgoszcz": {"id": -1001759834702, "limit": 5, "thread_id": 1427}    # Ветка 1445 в Быдгощ @ua_bydgoszcz
 }
 
