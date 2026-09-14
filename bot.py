@@ -141,6 +141,7 @@ CHANNELS_MAPPING = {
     "Białystok": {"id": -1004359303051, "limit": 5},                       # @Praca_Belostok
     "Radom": {"id": -1003797919409, "limit": 5},                           # @Praca_Radom
     "Częstochowa": {"id": -1004372087006, "limit": 5},                     # @Praca_Czestochowa
+    "Rzeszów": {"id": -1003849575739, "limit": 5},                         # @Praca_rzeszow_ua
     "Gdynia": {"id": -1004432735605, "limit": 5},                          # @Praca_w_Gdynie
     "Poznań": {"id": -1001716517416, "limit": 3, "thread_id": 81854},    # Ветка познань
     "Bydgoszcz": {"id": -1001759834702, "limit": 5, "thread_id": 1427}    # Ветка 1445 в Быдгощ @ua_bydgoszcz
