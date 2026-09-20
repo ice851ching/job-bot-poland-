@@ -19,9 +19,9 @@ from aiogram.types import (
     Message, CallbackQuery,
     InlineKeyboardMarkup, InlineKeyboardButton,
     ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
-    WebAppInfo, BufferedInputFile
+    WebAppInfo, BufferedInputFile, LabeledPrice, PreCheckoutQuery
 )
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -60,22 +60,18 @@ def get_user_lock(tid: int) -> asyncio.Lock:
         USER_LOCKS[tid] = asyncio.Lock()
     return USER_LOCKS[tid]
 
-REF_LINK = "https://kierowca.mbpartners.pl/rejestracja/?invitation=048A521B"
 DONATE_ACCOUNT = "84 9511 0000 0052 9681 3000 0010"
 
-PROMO_TEXT = (
-    "💼 <b>Ищешь подработку с гибким графиком в Польше?</b>\n\n"
-    "Подключайся к доставке через <b>MB Partners</b> и выходи на заказы в "
-    "<b>Glovo / Uber Eats / Bolt Food</b>.\n\n"
-    "Что по условиям:\n"
-    "• свободный график — можно совмещать с учёбой или основной работой\n"
-    "• выплаты каждую неделю на карту\n"
-    "• можно работать на своём авто, велосипеде или самокате\n"
-    "• быстрый старт через проверенного партнёра\n\n"
-    "🎁 <b>Бонус для новых:</b> 50 PLN на баланс при регистрации\n"
-    "🏷 <b>Промокод:</b> 048A521B\n\n"
-    "👇 Нажми на кнопку ниже, чтобы оставить заявку"
-)
+# ==================== VIP ====================
+VIP_PRICE_STARS = 100          # цена в Telegram Stars
+VIP_DURATION_DAYS = 60         # срок VIP за одну покупку
+VIP_PAYLOAD = "vip_60d"        # идентификатор товара в инвойсе
+
+# Источники, которые получают только VIP-пользователи (у бесплатных: OLX, Praca.pl, RocketJobs)
+VIP_ONLY_SOURCES = {"Lento", "Infopraca"}
+
+# Слать ли VIP-источники в каналы-сателлиты. False = каналы получают только бесплатные 3 сайта.
+CHANNELS_ALLOW_VIP_SOURCES = False
 
 BLOCKED_KEYWORDS = [
     "uber", "bolt", "glovo", "uber eats", "bolt food",
@@ -211,6 +207,7 @@ TEXTS = {
             f"<b>{BTN_RESET}</b> — настроить фильтры заново\n"
             f"<b>{BTN_STOP}</b> — остановить рассылку\n"
             f"<b>{BTN_HELP}</b> — эта справка\n"
+            "<b>/vip</b> — ⭐ VIP-версия: 5 сайтов вместо 3 и поиск без остановок\n"
             "<b>#⃣ Создать резюме</b> — конструктор резюме с моментальным получением PDF в чат (лимит: 3 резюме в день)\n\n"
             "По вопросам и сотрудничеству: @Hriaker1"
         ),
@@ -230,6 +227,45 @@ TEXTS = {
         ),
         "btn_continue": "🔄 Продолжить поиск",
         "search_renewed": "🟢 Отлично! Поиск успешно возобновлен еще на 3 дня. Свежие вакансии уже в пути! 🚀",
+        "vip_promo": (
+            "⭐ <b>Хочешь больше вакансий?</b>\n\n"
+            "С <b>VIP</b> бот ищет на <b>5 сайтах вместо 3</b> — добавляются "
+            "<b>Lento.pl</b> и <b>Infopraca.pl</b>, а поиск работает "
+            "<b>без остановок каждые 3 дня</b>.\n\n"
+            "💰 <b>{price} ⭐ = {days} дней VIP</b>\n\n"
+            "👇 Подробнее — кнопка ниже или команда /vip"
+        ),
+        "vip_info": (
+            "⭐ <b>VIP-версия</b>\n\n"
+            "<b>Что даёт VIP:</b>\n"
+            "• <b>+2 сайта в поиске</b> — всего 5 вместо 3:\n"
+            "   🔹 <b>Lento.pl</b> — большой польский сайт локальных объявлений (что-то вроде OLX). "
+            "В разделе «Praca» часто попадаются вакансии от небольших работодателей.\n"
+            "   🔹 <b>Infopraca.pl</b> — польский портал вакансий: предложения от работодателей "
+            "и агентств по всей Польше.\n"
+            "• <b>Поиск без остановок</b> — в бесплатном плане поиск нужно подтверждать каждые 3 дня, "
+            "в VIP этого нет.\n\n"
+            "<b>Сравнение:</b>\n"
+            "🆓 Бесплатно: OLX, Praca.pl, RocketJobs + подтверждение каждые 3 дня\n"
+            "⭐ VIP: OLX, Praca.pl, RocketJobs + Lento.pl + Infopraca.pl, без остановок\n\n"
+            "💰 <b>Цена: {price} ⭐ Telegram Stars за {days} дней VIP.</b>\n"
+            "Разовый платёж, автопродления нет."
+        ),
+        "vip_active_line": "✅ <b>VIP активен до {until}.</b>\nЕсли продлишь сейчас, новые {days} дней добавятся к текущему сроку.\n\n",
+        "btn_buy_vip": "⭐ Купить VIP — {price} ⭐ / {days} дней",
+        "btn_extend_vip": "⭐ Продлить на {days} дней — {price} ⭐",
+        "btn_vip_details": "ℹ️ Подробнее про VIP",
+        "vip_invoice_title": "VIP на {days} дней",
+        "vip_invoice_desc": "5 сайтов вместо 3 (+ Lento.pl и Infopraca.pl) и поиск без остановок каждые 3 дня. Срок действия — {days} дней.",
+        "vip_invoice_label": "VIP {days} дней",
+        "vip_thanks": (
+            "🎉 <b>Оплата прошла — VIP активирован!</b>\n\n"
+            "VIP действует до <b>{until}</b>.\n"
+            "Теперь бот ищет на 5 сайтах (добавились Lento.pl и Infopraca.pl) "
+            "и не останавливается каждые 3 дня. Спасибо за поддержку! ⭐"
+        ),
+        "vip_pay_error": "⚠️ Оплата прошла, но при активации VIP возникла ошибка. Напиши @Hriaker1 — всё быстро исправим.",
+        "paysupport": "💬 По вопросам оплаты пиши: @Hriaker1\nУкажи свой Telegram ID и время платежа.",
         "btn_cv": "#⃣ Создать резюме",
     },
     "pl": {
@@ -264,6 +300,7 @@ TEXTS = {
             f"<b>{BTN_RESET}</b> — ustaw filtry od nowa\n"
             f"<b>{BTN_STOP}</b> — zatrzymaj wysyłkę\n"
             f"<b>{BTN_HELP}</b> — ta pomoc\n"
+            "<b>/vip</b> — ⭐ wersja VIP: 5 serwisów zamiast 3 i wyszukiwanie bez przerw\n"
             "<b>#⃣ Stwórz CV</b> — kreator CV z bezpośrednim przesłaniem PDF (limit: 3 na dobę)\n\n"
             "Pytania i współpraca: @Hriaker1"
         ),
@@ -282,6 +319,45 @@ TEXTS = {
         ),
         "btn_continue": "🔄 Kontynuuj wyszukiwanie",
         "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowe oferty już wkrótce! 🚀",
+        "vip_promo": (
+            "⭐ <b>Chcesz więcej ofert?</b>\n\n"
+            "Z <b>VIP</b> bot szuka na <b>5 serwisach zamiast 3</b> — dochodzą "
+            "<b>Lento.pl</b> i <b>Infopraca.pl</b>, a wyszukiwanie działa "
+            "<b>bez przerw co 3 dni</b>.\n\n"
+            "💰 <b>{price} ⭐ = {days} dni VIP</b>\n\n"
+            "👇 Szczegóły — przycisk poniżej lub komenda /vip"
+        ),
+        "vip_info": (
+            "⭐ <b>Wersja VIP</b>\n\n"
+            "<b>Co daje VIP:</b>\n"
+            "• <b>+2 serwisy w wyszukiwaniu</b> — razem 5 zamiast 3:\n"
+            "   🔹 <b>Lento.pl</b> — duży polski serwis ogłoszeń lokalnych (coś jak OLX). "
+            "W dziale „Praca” często trafiają się oferty od mniejszych pracodawców.\n"
+            "   🔹 <b>Infopraca.pl</b> — polski portal z ofertami pracy od pracodawców "
+            "i agencji z całej Polski.\n"
+            "• <b>Wyszukiwanie bez przerw</b> — w wersji darmowej trzeba co 3 dni potwierdzać "
+            "wyszukiwanie, w VIP nie.\n\n"
+            "<b>Porównanie:</b>\n"
+            "🆓 Darmowa: OLX, Praca.pl, RocketJobs + potwierdzenie co 3 dni\n"
+            "⭐ VIP: OLX, Praca.pl, RocketJobs + Lento.pl + Infopraca.pl, bez przerw\n\n"
+            "💰 <b>Cena: {price} ⭐ Telegram Stars za {days} dni VIP.</b>\n"
+            "Płatność jednorazowa, bez automatycznego odnawiania."
+        ),
+        "vip_active_line": "✅ <b>VIP aktywny do {until}.</b>\nJeśli przedłużysz teraz, kolejne {days} dni zostanie dodane do obecnego terminu.\n\n",
+        "btn_buy_vip": "⭐ Kup VIP — {price} ⭐ / {days} dni",
+        "btn_extend_vip": "⭐ Przedłuż o {days} dni — {price} ⭐",
+        "btn_vip_details": "ℹ️ Więcej o VIP",
+        "vip_invoice_title": "VIP na {days} dni",
+        "vip_invoice_desc": "5 serwisów zamiast 3 (+ Lento.pl i Infopraca.pl) i wyszukiwanie bez przerw co 3 dni. Okres ważności — {days} dni.",
+        "vip_invoice_label": "VIP {days} dni",
+        "vip_thanks": (
+            "🎉 <b>Płatność przyjęta — VIP aktywowany!</b>\n\n"
+            "VIP działa do <b>{until}</b>.\n"
+            "Bot szuka teraz na 5 serwisach (doszły Lento.pl i Infopraca.pl) "
+            "i nie zatrzymuje się co 3 dni. Dziękuję za wsparcie! ⭐"
+        ),
+        "vip_pay_error": "⚠️ Płatność przeszła, ale wystąpił błąd przy aktywacji VIP. Napisz do @Hriaker1 — szybko to naprawimy.",
+        "paysupport": "💬 W sprawie płatności pisz: @Hriaker1\nPodaj swoje Telegram ID i czas płatności.",
         "btn_cv": "#⃣ Stwórz CV",
     },
     "ua": {
@@ -316,6 +392,7 @@ TEXTS = {
             f"<b>{BTN_RESET}</b> — налаштувати фільтри заново\n"
             f"<b>{BTN_STOP}</b> — зупинити розсилку\n"
             f"<b>{BTN_HELP}</b> — ця довідка\n"
+            "<b>/vip</b> — ⭐ VIP-версія: 5 сайтів замість 3 і пошук без зупинок\n"
             "<b>#⃣ Створити резюме</b> — конструктор резюме з миттєвим отриманням PDF в чаті (ліміт: 3 на день)\n\n"
             "Питання та співпраця: @Hriaker1"
         ),
@@ -334,6 +411,45 @@ TEXTS = {
         ),
         "btn_continue": "🔄 Продовжити пошук",
         "search_renewed": "🟢 Чудово! Пошук успішно відновлено ще на 3 дні. Свіжі вакансії вже летять до тебе! 🚀",
+        "vip_promo": (
+            "⭐ <b>Хочеш більше вакансій?</b>\n\n"
+            "З <b>VIP</b> бот шукає на <b>5 сайтах замість 3</b> — додаються "
+            "<b>Lento.pl</b> та <b>Infopraca.pl</b>, а пошук працює "
+            "<b>без зупинок кожні 3 дні</b>.\n\n"
+            "💰 <b>{price} ⭐ = {days} днів VIP</b>\n\n"
+            "👇 Докладніше — кнопка нижче або команда /vip"
+        ),
+        "vip_info": (
+            "⭐ <b>VIP-версія</b>\n\n"
+            "<b>Що дає VIP:</b>\n"
+            "• <b>+2 сайти в пошуку</b> — разом 5 замість 3:\n"
+            "   🔹 <b>Lento.pl</b> — великий польський сайт локальних оголошень (щось на кшталт OLX). "
+            "У розділі «Praca» часто трапляються вакансії від невеликих роботодавців.\n"
+            "   🔹 <b>Infopraca.pl</b> — польський портал вакансій: пропозиції від роботодавців "
+            "та агенцій по всій Польщі.\n"
+            "• <b>Пошук без зупинок</b> — у безкоштовному плані пошук треба підтверджувати кожні 3 дні, "
+            "у VIP цього немає.\n\n"
+            "<b>Порівняння:</b>\n"
+            "🆓 Безкоштовно: OLX, Praca.pl, RocketJobs + підтвердження кожні 3 дні\n"
+            "⭐ VIP: OLX, Praca.pl, RocketJobs + Lento.pl + Infopraca.pl, без зупинок\n\n"
+            "💰 <b>Ціна: {price} ⭐ Telegram Stars за {days} днів VIP.</b>\n"
+            "Разовий платіж, без автопродовження."
+        ),
+        "vip_active_line": "✅ <b>VIP активний до {until}.</b>\nЯкщо продовжиш зараз, нові {days} днів додадуться до поточного терміну.\n\n",
+        "btn_buy_vip": "⭐ Купити VIP — {price} ⭐ / {days} днів",
+        "btn_extend_vip": "⭐ Продовжити на {days} днів — {price} ⭐",
+        "btn_vip_details": "ℹ️ Докладніше про VIP",
+        "vip_invoice_title": "VIP на {days} днів",
+        "vip_invoice_desc": "5 сайтів замість 3 (+ Lento.pl та Infopraca.pl) і пошук без зупинок кожні 3 дні. Термін дії — {days} днів.",
+        "vip_invoice_label": "VIP {days} днів",
+        "vip_thanks": (
+            "🎉 <b>Оплата пройшла — VIP активовано!</b>\n\n"
+            "VIP діє до <b>{until}</b>.\n"
+            "Тепер бот шукає на 5 сайтах (додалися Lento.pl та Infopraca.pl) "
+            "і не зупиняється кожні 3 дні. Дякую за підтримку! ⭐"
+        ),
+        "vip_pay_error": "⚠️ Оплата пройшла, але під час активації VIP сталася помилка. Напиши @Hriaker1 — швидко все виправимо.",
+        "paysupport": "💬 З питань оплати пиши: @Hriaker1\nВкажи свій Telegram ID і час платежу.",
         "btn_cv": "#⃣ Створити резюме",
     },
 }
@@ -342,6 +458,21 @@ TEXTS = {
 def t(lang, key, **kwargs):
     text = TEXTS.get(lang, TEXTS["ru"]).get(key, "")
     return text.format(**kwargs) if kwargs else text
+
+
+def vip_t(lang, key, **kwargs):
+    """t() для VIP-текстов: сама подставляет цену и срок."""
+    kwargs.setdefault("price", VIP_PRICE_STARS)
+    kwargs.setdefault("days", VIP_DURATION_DAYS)
+    kwargs.setdefault("until", "")
+    return t(lang, key, **kwargs)
+
+
+def format_vip_date(dt):
+    try:
+        return dt.astimezone(ZoneInfo("Europe/Warsaw")).strftime("%d.%m.%Y")
+    except Exception:
+        return dt.strftime("%d.%m.%Y")
 
 
 def get_user_lang(tid):
@@ -625,6 +756,73 @@ def db_pause_search_filter(tid):
         return False
 
 
+# ==================== VIP (DATABASE) ====================
+
+def db_get_vip_until(tid):
+    """Дата окончания VIP (datetime) или None. Отдельный запрос — чтобы не ломать db_get_user."""
+    try:
+        r = supabase.table("users").select("vip_until").eq("telegram_id", tid).execute()
+        if r.data and r.data[0].get("vip_until"):
+            return parse_iso_datetime(r.data[0]["vip_until"])
+    except Exception as e:
+        logger.error(f"db_get_vip_until({tid}): {e}")
+    return None
+
+
+def db_is_vip(tid) -> bool:
+    until = db_get_vip_until(tid)
+    return bool(until and until > datetime.now(timezone.utc))
+
+
+def db_get_active_vip_ids():
+    """Множество telegram_id с действующим VIP. При ошибке БД возвращает None (а не пустое множество!)."""
+    try:
+        now_str = datetime.now(timezone.utc).isoformat()
+        r = supabase.table("users").select("telegram_id").gt("vip_until", now_str).execute()
+        return {row["telegram_id"] for row in r.data} if r.data else set()
+    except Exception as e:
+        logger.error(f"db_get_active_vip_ids: {e}")
+        return None
+
+
+def db_activate_vip(tid, days):
+    """Выдаёт или продлевает VIP. Если VIP ещё действует — новый срок прибавляется к текущему.
+    Возвращает новую дату окончания или None, если записать не удалось."""
+    for attempt in range(3):
+        try:
+            r = supabase.table("users").select("vip_until").eq("telegram_id", tid).execute()
+            current = None
+            if r.data and r.data[0].get("vip_until"):
+                current = parse_iso_datetime(r.data[0]["vip_until"])
+            now = datetime.now(timezone.utc)
+            base = current if (current and current > now) else now
+            new_until = base + timedelta(days=days)
+            supabase.table("users").upsert(
+                {"telegram_id": tid, "vip_until": new_until.isoformat()},
+                on_conflict="telegram_id"
+            ).execute()
+            return new_until
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            logger.error(f"❌ db_activate_vip({tid}) failed: {e}")
+    return None
+
+
+def db_log_vip_payment(tid, charge_id, stars, vip_until):
+    """Журнал платежей (нужен charge_id для возвратов). Не критично: если таблицы нет — просто лог."""
+    try:
+        supabase.table("vip_payments").insert({
+            "telegram_id": tid,
+            "telegram_charge_id": charge_id,
+            "stars": stars,
+            "vip_until": vip_until.isoformat(),
+        }).execute()
+    except Exception as e:
+        logger.error(f"db_log_vip_payment({tid}, {charge_id}): {e}")
+
+
 def db_get_jobs_for_city(city, limit=150, hours=24):
     """С автоповтором на любые сетевые ошибки"""
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
@@ -898,10 +1096,15 @@ def format_job(job):
     return message.strip()
 
 
-async def send_promo(chat_id):
+async def send_promo(chat_id, lang="ru"):
+    """Рекламное сообщение с VIP (закрепляется в чате). Тем, у кого VIP уже есть, не показываем."""
     try:
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚀 Начать", url=REF_LINK)]])
-        sent_msg = await bot.send_message(chat_id, PROMO_TEXT, reply_markup=kb, parse_mode="HTML")
+        if await asyncio.to_thread(db_is_vip, chat_id):
+            return
+        sent_msg = await bot.send_message(
+            chat_id, vip_t(lang, "vip_promo"),
+            reply_markup=kb_vip_promo(lang), parse_mode="HTML"
+        )
         try:
             await bot.pin_chat_message(chat_id=chat_id, message_id=sent_msg.message_id, disable_notification=True)
         except Exception:
@@ -910,9 +1113,9 @@ async def send_promo(chat_id):
         logger.error(f"promo error: {e}")
 
 
-async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=False):
+async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=False, is_vip=False):
     async with get_user_lock(tid):
-        sent, sf, ss, blocked = 0, 0, 0, 0
+        sent, sf, ss, blocked, vip_only = 0, 0, 0, 0, 0
         
         # Получаем историю отправки с предохранителем
         already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, tid)
@@ -930,6 +1133,11 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
 
             job_id = job.get("id")
             if job_id is None:
+                continue
+
+            # Lento / Infopraca — только для VIP (не помечаем как отправленные: после покупки VIP они дойдут)
+            if not is_vip and job.get("source") in VIP_ONLY_SOURCES:
+                vip_only += 1
                 continue
 
             if is_invalid_olx_url(job.get("url")):
@@ -1004,7 +1212,7 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
                 )
 
         logger.info(
-            f"User {tid}: Sent={sent} filtered={sf} already={ss} blocked={blocked}"
+            f"User {tid}: Sent={sent} filtered={sf} already={ss} blocked={blocked} vip_only_skipped={vip_only} vip={is_vip}"
         )
 
         if is_initial:
@@ -1061,6 +1269,8 @@ async def post_jobs_to_channels():
                 if job_id is None or job_id in already_sent_ids:
                     continue
                 if is_invalid_olx_url(job.get("url")) or is_delivery_job(job):
+                    continue
+                if not CHANNELS_ALLOW_VIP_SOURCES and job.get("source") in VIP_ONLY_SOURCES:
                     continue
                 new_jobs.append(job)
 
@@ -1156,6 +1366,20 @@ def kb_stopped_menu():
 
 def kb_renew_search(lang):
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t(lang, "btn_continue"), callback_data="renew_search")]])
+
+
+def kb_vip_promo(lang):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=vip_t(lang, "btn_buy_vip"), callback_data="buy_vip")],
+        [InlineKeyboardButton(text=vip_t(lang, "btn_vip_details"), callback_data="vip_info")],
+    ])
+
+
+def kb_vip_buy(lang, is_vip=False):
+    key = "btn_extend_vip" if is_vip else "btn_buy_vip"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=vip_t(lang, key), callback_data="buy_vip")],
+    ])
 
 
 # ==================== BROADCASTER ====================
@@ -1348,6 +1572,134 @@ async def admin_send_ad(c: CallbackQuery, state: FSMContext):
         await c.message.answer(f"❌ Ошибка: {e}")
 
 
+# ==================== VIP: КОМАНДЫ И ОПЛАТА (Telegram Stars) ====================
+
+async def grant_vip(tid, days):
+    """Выдаёт/продлевает VIP и снимает паузу поиска, если она была. Возвращает дату окончания или None."""
+    new_until = await asyncio.to_thread(db_activate_vip, tid, days)
+    if not new_until:
+        return None
+    flt = await asyncio.to_thread(db_get_filter, tid)
+    if flt and flt.get("is_paused"):
+        await asyncio.to_thread(db_renew_search_filter, tid)
+    return new_until
+
+
+async def send_vip_info(tid):
+    lang = await asyncio.to_thread(get_user_lang, tid)
+    until = await asyncio.to_thread(db_get_vip_until, tid)
+    is_vip = bool(until and until > datetime.now(timezone.utc))
+    text = vip_t(lang, "vip_info")
+    if is_vip:
+        text = vip_t(lang, "vip_active_line", until=format_vip_date(until)) + text
+    await bot.send_message(tid, text, parse_mode="HTML", reply_markup=kb_vip_buy(lang, is_vip))
+
+
+@router.message(Command("vip"))
+async def cmd_vip(m: Message):
+    try:
+        await send_vip_info(m.from_user.id)
+    except Exception as e:
+        logger.warning(f"cmd_vip error: {e}")
+
+
+@router.callback_query(F.data == "vip_info")
+async def on_vip_info(c: CallbackQuery):
+    try:
+        await send_vip_info(c.from_user.id)
+        await c.answer()
+    except Exception as e:
+        logger.warning(f"on_vip_info error: {e}")
+
+
+@router.callback_query(F.data == "buy_vip")
+async def on_buy_vip(c: CallbackQuery):
+    try:
+        lang = await asyncio.to_thread(get_user_lang, c.from_user.id)
+        await bot.send_invoice(
+            chat_id=c.from_user.id,
+            title=vip_t(lang, "vip_invoice_title"),
+            description=vip_t(lang, "vip_invoice_desc"),
+            payload=VIP_PAYLOAD,
+            provider_token="",   # для Stars токен провайдера пустой
+            currency="XTR",
+            prices=[LabeledPrice(label=vip_t(lang, "vip_invoice_label"), amount=VIP_PRICE_STARS)],
+        )
+        await c.answer()
+    except Exception as e:
+        logger.warning(f"on_buy_vip error: {e}")
+        await c.answer("Error. Try again later.", show_alert=True)
+
+
+@router.pre_checkout_query()
+async def on_pre_checkout(q: PreCheckoutQuery):
+    try:
+        if q.invoice_payload != VIP_PAYLOAD or q.currency != "XTR" or q.total_amount != VIP_PRICE_STARS:
+            await q.answer(ok=False, error_message="Invalid invoice. Please request /vip again.")
+            return
+        await q.answer(ok=True)
+    except Exception as e:
+        logger.warning(f"on_pre_checkout error: {e}")
+
+
+@router.message(F.successful_payment)
+async def on_successful_payment(m: Message):
+    sp = m.successful_payment
+    tid = m.from_user.id
+    if sp.invoice_payload != VIP_PAYLOAD:
+        return
+    lang = await asyncio.to_thread(get_user_lang, tid)
+
+    new_until = await grant_vip(tid, VIP_DURATION_DAYS)
+    if not new_until:
+        # Деньги списаны, а VIP не записался — сообщаем админу charge_id для ручной выдачи/возврата
+        logger.error(f"🚨 VIP not activated after payment: user={tid} charge={sp.telegram_payment_charge_id}")
+        try:
+            await bot.send_message(
+                ADMIN_ID,
+                f"🚨 Оплата прошла, но VIP не активирован!\nuser: {tid}\n"
+                f"charge_id: {sp.telegram_payment_charge_id}\nstars: {sp.total_amount}"
+            )
+        except Exception:
+            pass
+        await m.answer(vip_t(lang, "vip_pay_error"))
+        return
+
+    await asyncio.to_thread(db_log_vip_payment, tid, sp.telegram_payment_charge_id, sp.total_amount, new_until)
+    logger.info(f"⭐ VIP activated: user={tid} until={new_until.isoformat()}")
+    await m.answer(vip_t(lang, "vip_thanks", until=format_vip_date(new_until)), parse_mode="HTML")
+
+
+@router.message(Command("paysupport"))
+async def cmd_paysupport(m: Message):
+    try:
+        lang = await asyncio.to_thread(get_user_lang, m.from_user.id)
+        await m.answer(vip_t(lang, "paysupport"))
+    except Exception as e:
+        logger.warning(f"cmd_paysupport error: {e}")
+
+
+@router.message(Command("givevip"), F.from_user.id == ADMIN_ID)
+async def cmd_givevip(m: Message, command: CommandObject):
+    """Админ: /givevip <telegram_id> [дней] — выдать VIP вручную (владелец бота не может сам платить Stars своему боту)."""
+    try:
+        parts = (command.args or "").split()
+        if not parts:
+            await m.answer("Использование: /givevip <telegram_id> [дней]")
+            return
+        target = int(parts[0])
+        days = int(parts[1]) if len(parts) > 1 else VIP_DURATION_DAYS
+        until = await grant_vip(target, days)
+        if until:
+            await m.answer(f"✅ VIP для {target} до {format_vip_date(until)}")
+        else:
+            await m.answer("❌ Не удалось записать VIP (см. логи).")
+    except ValueError:
+        await m.answer("Использование: /givevip <telegram_id> [дней]")
+    except Exception as e:
+        logger.warning(f"cmd_givevip error: {e}")
+
+
 @router.message(Command("start"))
 async def cmd_start(m: Message, state: FSMContext):
     try:
@@ -1535,7 +1887,7 @@ async def on_umowa(c: CallbackQuery, state: FSMContext):
         await c.answer()
 
         await bot.send_message(c.from_user.id, t(lang, "menu_active"), reply_markup=kb_active_menu(lang, tid=c.from_user.id))
-        await send_promo(c.from_user.id)
+        await send_promo(c.from_user.id, lang)
         await asyncio.sleep(1)
 
         jobs = await asyncio.to_thread(db_get_jobs_for_city, city, 150, 24)
@@ -1546,7 +1898,8 @@ async def on_umowa(c: CallbackQuery, state: FSMContext):
             if ok:
                 jobs = await wait_for_city_jobs(city)
 
-        await send_jobs_to_user(c.from_user.id, jobs, user_filter=uf, limit=8, is_initial=True)
+        is_vip = await asyncio.to_thread(db_is_vip, c.from_user.id)
+        await send_jobs_to_user(c.from_user.id, jobs, user_filter=uf, limit=8, is_initial=True, is_vip=is_vip)
     except Exception as e:
         logger.warning(f"on_umowa error: {e}")
 
@@ -1584,6 +1937,13 @@ async def scheduled_check():
         now = datetime.now(timezone.utc)
         active_filters = []
 
+        # VIP-пользователи: без 3-дневной паузы + получают Lento/Infopraca
+        vip_ids = await asyncio.to_thread(db_get_active_vip_ids)
+        vip_lookup_ok = vip_ids is not None
+        if vip_ids is None:
+            vip_ids = set()
+            logger.warning("⚠️ VIP lookup failed: пауза никого не трогаем в этом цикле, шлём только бесплатные источники")
+
         for f in filters:
             tid = f["telegram_id"]
             
@@ -1593,7 +1953,7 @@ async def scheduled_check():
 
             last_renewal_str = f.get("last_renewal")
 
-            if last_renewal_str and tid > 0:
+            if last_renewal_str and tid > 0 and vip_lookup_ok and tid not in vip_ids:
                 try:
                     last_renewal = datetime.fromisoformat(
                         last_renewal_str.replace("Z", "+00:00")
@@ -1683,7 +2043,8 @@ async def scheduled_check():
             async with semaphore:
                 try:
                     return await send_jobs_to_user(
-                        tid, fresh_jobs, user_filter=uf, limit=user_limit
+                        tid, fresh_jobs, user_filter=uf, limit=user_limit,
+                        is_vip=(tid in vip_ids)
                     )
                 except asyncio.CancelledError:
                     raise
