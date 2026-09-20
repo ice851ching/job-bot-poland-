@@ -81,8 +81,12 @@ BLOCKED_KEYWORDS = [
 
 BTN_RESET = "🔄 Ustaw od nowa"
 BTN_STOP = "⏹ Zatrzymaj"
-BTN_HELP = "ℹ️ Pomoc"
+BTN_HELP = "ℹ️ Pomoc/VIP"
 BTN_RESTART = "🚀 Uruchom ponownie"
+BTN_CV = "#⃣ Stwórz CV"
+
+# Шаблоны резюме, доступные только VIP-пользователям (совпадает с data-tpl в index.html)
+VIP_ONLY_CV_TEMPLATES = {"t4", "t5", "t6"}
 
 # Временный лимит-трекер резюме (в памяти: user_id -> список timestamp генераций за последние 24 часа)
 CV_LIMIT_TRACKER = {}
@@ -953,6 +957,37 @@ async def health_check(request):
     return web.Response(text="OK", status=200)
 
 
+async def vip_status_handler(request: web.Request):
+    """
+    Отдаёт веб-приложению (конструктору резюме) статус VIP по telegram_id,
+    чтобы фронтенд мог показать/скрыть доступ к VIP-шаблонам.
+    """
+    headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, X-Requested-With",
+    }
+
+    if request.method == "OPTIONS":
+        return web.Response(status=200, headers=headers)
+
+    try:
+        uid_param = request.query.get("uid") or request.query.get("user_id")
+        if not uid_param:
+            return web.json_response({"error": "missing_uid"}, status=400, headers=headers)
+
+        try:
+            user_id = int(str(uid_param).strip())
+        except ValueError:
+            return web.json_response({"error": "invalid_uid"}, status=400, headers=headers)
+
+        is_vip = await asyncio.to_thread(db_is_vip, user_id)
+        return web.json_response({"is_vip": is_vip}, headers=headers)
+    except Exception as e:
+        logger.error(f"Error in vip_status_handler: {e}")
+        return web.json_response({"error": str(e)}, status=500, headers=headers)
+
+
 async def upload_cv_handler(request: web.Request):
     """
     Принимает Blob-файл напрямую с Netlify без левых файлообменников,
@@ -973,6 +1008,7 @@ async def upload_cv_handler(request: web.Request):
         user_id_param = reader.get("user_id") or reader.get("uid")
         file_field = reader.get("file")
         filename = reader.get("filename", "CV_Resume.pdf")
+        tpl = str(reader.get("tpl") or "").strip()
         
         if not file_field:
             return web.json_response({"error": "missing_parameters"}, status=400, headers=headers)
@@ -994,7 +1030,13 @@ async def upload_cv_handler(request: web.Request):
 
         if not user_id:
             return web.json_response({"error": "unauthorized"}, status=401, headers=headers)
-            
+
+        # Серверная защита VIP-шаблонов: даже если фронтенд обойти, здесь всё равно проверим права
+        if tpl in VIP_ONLY_CV_TEMPLATES:
+            is_vip = await asyncio.to_thread(db_is_vip, user_id)
+            if not is_vip:
+                return web.json_response({"error": "vip_required"}, status=403, headers=headers)
+
         # Защита от лимитов (макс 3 резюме в день)
         if not is_upload_allowed(user_id):
             return web.json_response({"error": "limit_exceeded"}, status=429, headers=headers)
@@ -1042,6 +1084,8 @@ async def start_web_server():
     app.router.add_get("/health", health_check)
     app.router.add_post("/api/upload_cv", upload_cv_handler)
     app.router.add_options("/api/upload_cv", upload_cv_handler)
+    app.router.add_get("/api/vip_status", vip_status_handler)
+    app.router.add_options("/api/vip_status", vip_status_handler)
     
     runner = web.AppRunner(app)
     await runner.setup()
@@ -1349,12 +1393,11 @@ def kb_umowa():
 
 
 def kb_active_menu(lang="ru", tid=None):
-    btn_cv_text = TEXTS.get(lang, TEXTS["ru"]).get("btn_cv", "#⃣ Создать резюме")
     web_url = f"https://myworkcvapp.netlify.app/index.html?uid={tid}" if tid else "https://myworkcvapp.netlify.app/index.html"
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_RESET), KeyboardButton(text=BTN_STOP)],
-            [KeyboardButton(text=BTN_HELP), KeyboardButton(text=btn_cv_text, web_app=WebAppInfo(url=web_url))],
+            [KeyboardButton(text=BTN_HELP), KeyboardButton(text=BTN_CV, web_app=WebAppInfo(url=web_url))],
         ],
         resize_keyboard=True
     )
