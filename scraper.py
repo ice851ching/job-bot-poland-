@@ -148,7 +148,7 @@ def fetch_url(url: str, impersonate_target: str = "chrome120", referer: str = No
         return 0, ""
 
 
-TARGET_BROWSERS = ["chrome120", "chrome110", "edge101", "safari_mac_12_0"]
+TARGET_BROWSERS = ["chrome120", "chrome110", "edge101", "safari184"]
 
 def fetch_url_with_retry(url: str, referer: str = None):
     # 1. Пробуем получить страницу стандартным бронебойным путем (через curl_cffi)
@@ -450,23 +450,26 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                         continue
 
                     # 1. Заголовок
-                    title_el = card.select_one("a.offer_list_offer_title_link") or card.select_one("h3 a")
-                    if not title_el:
-                        parse_errors += 1
-                        continue
-                    
-                    title = strip_html(title_el.get_text(strip=True))
-                    if not title:
-                        title = a.get("title", "").replace("Zobacz ofertę", "").strip()
+                    # Самый надёжный источник — атрибут title на самой карточке-ссылке
+                    # (формат "Zobacz ofertę <Название>"), он не зависит от внутренних
+                    # CSS-классов, которые на сайте похожи на автогенерируемые и могут
+                    # меняться при каждом деплое. Внутренние селекторы — как бонус/уточнение.
+                    title = a.get("title", "").replace("Zobacz ofertę", "").strip()
+
+                    title_el = card.select_one("a.offer_list_offer_title_link") or card.select_one("h3 a") or card.find("h3")
+                    if title_el:
+                        inner_title = strip_html(title_el.get_text(strip=True))
+                        if inner_title:
+                            title = inner_title
 
                     if not title or len(title) < 3:
                         parse_errors += 1
                         continue
 
                     # 2. Ссылка
-                    link = title_el.get("href", "").strip()
-                    if not link:
-                        link = a.get("href", "").strip()
+                    link = a.get("href", "").strip()
+                    if not link and title_el:
+                        link = title_el.get("href", "").strip()
                     if not link:
                         parse_errors += 1
                         continue
