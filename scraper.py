@@ -443,11 +443,15 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
 
             for a in offer_links:
                 try:
-                    # Поднимаемся до родительского контейнера li
-                    card = a.find_parent("li")
-                    if not card:
-                        parse_errors += 1
-                        continue
+                    # Сайт больше не оборачивает карточки в <li> — раньше здесь было
+                    # a.find_parent("li"), из-за чего 100% карточек улетали в errors,
+                    # даже не доходя до извлечения title. Берём саму ссылку-карточку
+                    # как контейнер; если в ней подозрительно мало текста (похоже,
+                    # это просто обёртка картинки, а не вся карточка) — поднимаемся
+                    # к ближайшему li/article/div-родителю.
+                    card = a
+                    if len(card.get_text(strip=True)) < 20:
+                        card = a.find_parent(["li", "article", "div"]) or a
 
                     # 1. Заголовок
                     # Самый надёжный источник — атрибут title на самой карточке-ссылке
@@ -486,14 +490,24 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                         existing_ids.add(ext_id)
 
                     # 3. Извлекаем город через иконку svg.lucide-map-pin
+                    # Сама иконка обёрнута в свой собственный <div class="MuiBox-root ...">,
+                    # у которого кроме иконки ничего нет — он тоже подпадает под класс
+                    # "MuiBox|mui-", поэтому find_parent(class_=...) останавливался на этой
+                    # пустой обёртке и loc_text выходил пустым (а .split()[0] на пустой
+                    # строке падал с IndexError). Поднимаемся по предкам, пока не найдём
+                    # такого, где реально есть текст.
                     job_city = city
                     pin_icon = card.select_one("svg.lucide-map-pin")
                     if pin_icon:
-                        container = pin_icon.find_parent(class_=re.compile(r"MuiStack|MuiBox|mui-"))
-                        if container:
+                        container = pin_icon.parent
+                        hops = 0
+                        while container is not None and hops < 5:
                             loc_text = strip_html(container.get_text(" ", strip=True))
                             if loc_text:
-                                job_city = loc_text.split(",")[0].split()[0].replace(",", "").strip()
+                                job_city = loc_text.split(",")[0].split()[0].replace(",", "").strip() or city
+                                break
+                            container = container.parent
+                            hops += 1
 
                     if not city_matches(job_city, city):
                         continue
