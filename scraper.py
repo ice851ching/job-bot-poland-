@@ -88,7 +88,7 @@ def normalize_umowa(text):
         return "b2b"
     if any(x in t for x in ["dzieło", "dzielo"]) or re.search(r'\b(uod)\b', t):
         return "umowa_o_dzielo"
-    if any(x in t for x in ["staż", "staz", "praktyк", "praktyki", "internship"]):
+    if any(x in t for x in ["staż", "staz", "praktyk", "praktyki", "internship"]):
         return "staz"
     return None
 
@@ -99,9 +99,11 @@ def normalize_etat(text, salary_text=None):
     if isinstance(text, (list, tuple, set)):
         text = " ".join(str(v) for v in text)
     t = str(text).lower().strip()
-    if any(x in t for x in ["parttime", "part time", "niepełny", "niepelny", "неполный", "неповний", "1/2", "3/4", "1/4", "pół etatu", "czesc etatu", "dodatkowa", "dorywcza", "student"]):
+    if re.search(r"0[,.]5\s*etat", t):
         return "part"
-    if any(x in t for x in ["fulltime", "full time", "pełny", "pelny", "pełен", "pelen", "cały etat", "caly etat"]):
+    if any(x in t for x in ["parttime", "part time", "niepełny", "niepelny", "неполный", "неповний", "1/2", "3/4", "1/4", "pół etatu", "pol etatu", "czesc etatu", "część etatu", "cześć etatu", "dodatkowa", "dorywcza", "student"]):
+        return "part"
+    if any(x in t for x in ["fulltime", "full time", "pełny", "pelny", "pełen", "pelen", "cały etat", "caly etat"]):
         return "full"
     if salary_text and any(x in str(salary_text).lower() for x in ["mies", "m-c", "mc", "/ m", "zł/mies"]):
         return "full"
@@ -525,6 +527,474 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
         return 0
 
 
+# ==================== LENTO.PL ====================
+
+# Если у какого-то города поддомен на Lento отличается от обычного slug — добавь сюда.
+# Формат: "slug из get_city_slug": "поддомен на lento.pl"
+LENTO_SUBDOMAIN_OVERRIDES = {
+    # "zielona-gora": "zielonagora",
+}
+
+
+def is_lento_promo(card) -> bool:
+    """Промо-объявление: класс tablelist-tr-promo или плашка 'Promowane'."""
+    if "tablelist-tr-promo" in (card.get("class") or []):
+        return True
+    return card.select_one(".promo-label") is not None
+
+
+def extract_lento_card(card):
+    """Разбирает одну карточку Lento. Возвращает dict с полями или None, если карточка битая."""
+    title_el = card.select_one("a.title-list-item")
+    if not title_el:
+        return None
+
+    title = strip_html(title_el.get_text(" ", strip=True))
+    link = (title_el.get("href") or "").strip().split("?")[0].split("#")[0]
+    if not title or len(title) < 3 or not link:
+        return None
+    if not link.startswith("http"):
+        link = "https://lento.pl" + link
+
+    # Стабильный id объявления: data-id на карточке, запасной вариант — число в конце ссылки
+    ad_id = card.get("data-id")
+    if not ad_id:
+        m = re.search(r",(\d+)\.html$", link)
+        ad_id = m.group(1) if m else None
+
+    # Город
+    job_city = None
+    loc_el = card.select_one(".licon-pin-f")
+    if loc_el:
+        loc_text = re.sub(r"\s+", " ", loc_el.get_text(" ", strip=True)).strip()
+        m = re.search(r"\(([^)]+)\)", loc_text)  # формат "Cała Polska (Wrocław)"
+        job_city = (m.group(1) if m else loc_text).strip() or None
+
+    # Зарплата: "4 806 zł /mies. brutto" или "od 4806 zł do 5100 zł /mies. brutto"
+    salary = None
+    sal_el = card.select_one("div.param-list-row div.padding-top-2")
+    if sal_el:
+        sal_text = re.sub(r"\s+", " ", sal_el.get_text(" ", strip=True)).strip().replace(" /", "/")
+        if re.search(r"\d", sal_text):
+            salary = sal_text
+
+    # Теги: [Категория(ссылка), "Pełny etat", "Umowa o pracę"] — категорию (с <a>) пропускаем
+    tabs = [
+        t.get_text(" ", strip=True)
+        for t in card.select("span.list-atrr-item-tab")
+        if not t.find("a")
+    ]
+    attrs_text = " ".join(tabs)
+
+    return {
+        "ad_id": ad_id,
+        "title": title,
+        "link": link,
+        "city": job_city,
+        "salary": salary,
+        "umowa": normalize_umowa(attrs_text) or normalize_umowa(title),
+        "etat": normalize_etat(attrs_text, salary) or normalize_etat(title, salary),
+    }
+
+
+async def parse_lento(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
+    try:
+        slug = get_city_slug(city)
+        if not slug:
+            return 0
+        subdomain = LENTO_SUBDOMAIN_OVERRIDES.get(slug, slug)
+        url = f"https://{subdomain}.lento.pl/praca/dam-prace.html"
+
+        status, html = await asyncio.to_thread(fetch_url_with_retry, url, "https://www.google.com/")
+        if status != 200 or not html:
+            logger.warning(f"Lento returned status {status} for {city} ({url})")
+            return 0
+
+        soup = BeautifulSoup(html, "html.parser")
+        cards = soup.select("div.tablelist-tr")
+        if not cards:
+            logger.warning(f"⚠️ Lento: 0 cards found for {city}. Page title: {soup.title.string if soup.title else 'N/A'}")
+            return 0
+
+        jobs_to_save = []
+        ignored_promo = 0
+        ignored_duplicate = 0
+        ignored_city = 0
+        parse_errors = 0
+
+        for card in cards:
+            try:
+                # Promowane — выкидываем сразу
+                if is_lento_promo(card):
+                    ignored_promo += 1
+                    continue
+
+                data = extract_lento_card(card)
+                if not data:
+                    parse_errors += 1
+                    continue
+
+                job_city = data["city"] or city
+                if not city_matches(job_city, city):
+                    ignored_city += 1
+                    continue
+
+                ext_id = hashlib.md5(f"lento_{data['ad_id'] or data['link']}".encode()).hexdigest()
+
+                async with lock:
+                    if ext_id in existing_ids:
+                        ignored_duplicate += 1
+                        continue
+                    existing_ids.add(ext_id)
+
+                jobs_to_save.append({
+                    "external_id": ext_id,
+                    "title": data["title"],
+                    "city": job_city,
+                    "salary": data["salary"],
+                    "url": data["link"],
+                    "source": "Lento",
+                    "umowa": data["umowa"],
+                    "etat": data["etat"],
+                })
+            except Exception as e:
+                parse_errors += 1
+                logger.debug(f"Lento card error: {e}")
+
+        saved = await db_insert_jobs_batch(jobs_to_save)
+        logger.info(
+            f"Lento saved={saved} (cards={len(cards)}, promo={ignored_promo}, duplicates={ignored_duplicate}, "
+            f"city_mismatch={ignored_city}, errors={parse_errors}) city={city}"
+        )
+        return saved
+    except Exception as e:
+        logger.error(f"parse_lento({city}) error: {e}")
+        return 0
+
+
+# ==================== FACHPRACA.PL ====================
+
+# На Fachpraca город в URL пишется польскими буквами: /oferty-pracy/l/toruń/
+# Если у какого-то города адрес отличается — впиши сюда готовый кусок URL.
+FACHPRACA_CITY_OVERRIDES = {
+    # "Zielona Góra": "zielona-góra",
+}
+
+
+def build_fachpraca_url(city: str) -> str:
+    raw = FACHPRACA_CITY_OVERRIDES.get(city) or city.lower().strip().replace(" ", "-")
+    return f"https://www.fachpraca.pl/oferty-pracy/l/{urllib.parse.quote(raw)}/"
+
+
+def is_fachpraca_promo(card) -> bool:
+    """Выделенные/промо-объявления: любой класс-модификатор кроме базового job-list__offer."""
+    classes = [c for c in (card.get("class") or []) if c != "job-list__offer"]
+    return any(x in " ".join(classes).lower() for x in ["promo", "wyroznion", "wyróżnion", "featured", "highlight", "top"])
+
+
+def extract_fachpraca_card(card):
+    """Разбирает одну карточку Fachpraca (li.job-list__offer). Возвращает dict или None."""
+    title_el = card.select_one("a.job-list__job-name")
+    if not title_el:
+        return None
+
+    title = strip_html(title_el.get("title") or title_el.get_text(" ", strip=True))
+    link = (title_el.get("href") or "").strip().split("?")[0]
+    if not title or len(title) < 3 or not link:
+        return None
+    if not link.startswith("http"):
+        link = "https://www.fachpraca.pl" + link
+
+    # Стабильный id: data-secret у кнопки "Obserwuj", запасной вариант — число в конце ссылки
+    ad_id = None
+    btn = card.select_one("button.job-list__watch[data-secret]")
+    if btn:
+        ad_id = btn.get("data-secret")
+    if not ad_id:
+        m = re.search(r"-(\d+)/?$", link)
+        ad_id = m.group(1) if m else None
+
+    def text_of(selector):
+        el = card.select_one(selector)
+        if not el:
+            return None
+        t = el.get_text(" ", strip=True).replace("\xa0", " ")
+        t = re.sub(r"\s+", " ", t).strip()
+        return t or None
+
+    job_city = text_of("p.job-list__job-location")
+
+    # Зарплата: "od 4 806,00 do 5 600,00 PLN miesięcznie brutto"
+    salary = text_of("p.job-list__job-pay")
+    if salary and not re.search(r"\d", salary):
+        salary = None
+
+    # Условия: [должность, категория, тип договора, этат] — например "umowa o pracę", "pełny etat"
+    conditions = " ".join(
+        re.sub(r"\s+", " ", li.get_text(" ", strip=True))
+        for li in card.select("ul.job-list__conditions li")
+    )
+
+    return {
+        "ad_id": ad_id,
+        "title": title,
+        "link": link,
+        "city": job_city,
+        "salary": salary,
+        "umowa": normalize_umowa(conditions) or normalize_umowa(title),
+        "etat": normalize_etat(conditions, salary) or normalize_etat(title, salary),
+    }
+
+
+async def parse_fachpraca(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
+    try:
+        if not city:
+            return 0
+
+        url = build_fachpraca_url(city)
+        status, html = await asyncio.to_thread(fetch_url_with_retry, url, "https://www.google.com/")
+
+        soup = BeautifulSoup(html, "html.parser") if (status == 200 and html) else None
+        cards = soup.select("li.job-list__offer") if soup else []
+
+        # Запасной вариант для составных названий: пробелы вместо дефиса ("zielona góra")
+        if not cards and " " in city.strip() and city not in FACHPRACA_CITY_OVERRIDES:
+            alt_url = f"https://www.fachpraca.pl/oferty-pracy/l/{urllib.parse.quote(city.lower().strip())}/"
+            logger.info(f"Fachpraca: пробуем запасной URL для {city}: {alt_url}")
+            status, html = await asyncio.to_thread(fetch_url_with_retry, alt_url, "https://www.google.com/")
+            if status == 200 and html:
+                soup = BeautifulSoup(html, "html.parser")
+                cards = soup.select("li.job-list__offer")
+                if cards:
+                    url = alt_url
+
+        if not cards:
+            logger.warning(
+                f"⚠️ Fachpraca: 0 cards for {city} (status={status}, url={url}, "
+                f"title={soup.title.string if soup and soup.title else 'N/A'})"
+            )
+            return 0
+
+        jobs_to_save = []
+        ignored_promo = 0
+        ignored_duplicate = 0
+        ignored_city = 0
+        parse_errors = 0
+
+        for card in cards[:50]:
+            try:
+                if is_fachpraca_promo(card):
+                    ignored_promo += 1
+                    continue
+
+                data = extract_fachpraca_card(card)
+                if not data:
+                    parse_errors += 1
+                    continue
+
+                job_city = data["city"] or city
+                if not city_matches(job_city, city):
+                    ignored_city += 1
+                    continue
+
+                ext_id = hashlib.md5(f"fachpraca_{data['ad_id'] or data['link']}".encode()).hexdigest()
+
+                async with lock:
+                    if ext_id in existing_ids:
+                        ignored_duplicate += 1
+                        continue
+                    existing_ids.add(ext_id)
+
+                jobs_to_save.append({
+                    "external_id": ext_id,
+                    "title": data["title"],
+                    "city": job_city,
+                    "salary": data["salary"],
+                    "url": data["link"],
+                    "source": "Fachpraca",
+                    "umowa": data["umowa"],
+                    "etat": data["etat"],
+                })
+            except Exception as e:
+                parse_errors += 1
+                logger.debug(f"Fachpraca card error: {e}")
+
+        saved = await db_insert_jobs_batch(jobs_to_save)
+        logger.info(
+            f"Fachpraca saved={saved} (cards={len(cards)}, promo={ignored_promo}, duplicates={ignored_duplicate}, "
+            f"city_mismatch={ignored_city}, errors={parse_errors}) city={city}"
+        )
+        return saved
+    except Exception as e:
+        logger.error(f"parse_fachpraca({city}) error: {e}")
+        return 0
+
+
+# ==================== INFOPRACA.PL ====================
+
+# Воеводства, которые приезжают хвостом в строке локации и городом не являются
+POLISH_VOIVODESHIPS = {
+    "dolnośląskie", "kujawsko-pomorskie", "lubelskie", "lubuskie", "łódzkie",
+    "małopolskie", "mazowieckie", "opolskie", "podkarpackie", "podlaskie",
+    "pomorskie", "śląskie", "świętokrzyskie", "warmińsko-mazurskie",
+    "wielkopolskie", "zachodniopomorskie",
+}
+
+# Зарплата в тексте: "4 806 zł brutto/mies", "5000-6000 PLN", "2 600 € netto"
+SALARY_RE = re.compile(
+    r"\d[\d\s\u00a0.,]*(?:\s*[-–]\s*\d[\d\s\u00a0.,]*)?\s*(?:zł|pln|eur|€)"
+    r"(?:\s*(?:brutto|netto))?(?:\s*/\s*[a-ząćęłńóśźż.]+)?",
+    re.IGNORECASE,
+)
+
+
+def clean_infopraca_city(loc_text: str, search_city: str):
+    """'65-548 Zielona Góra, lubuskie' / 'Zielona Góra, Gorzów Wielkopolski, lubuskie' -> город."""
+    if not loc_text:
+        return None
+    parts = []
+    for chunk in loc_text.split(","):
+        chunk = re.sub(r"\b\d{2}-\d{3}\b", "", chunk).strip()  # убираем почтовый индекс
+        if not chunk or chunk.lower() in POLISH_VOIVODESHIPS:
+            continue
+        parts.append(chunk)
+    if not parts:
+        return None
+    # Если объявление на несколько городов, берём тот, который мы и искали
+    for part in parts:
+        if city_matches(part, search_city):
+            return part
+    return parts[0]
+
+
+def extract_infopraca_card(card, search_city: str):
+    """Разбирает одну карточку Infopraca (article.job-card). Возвращает dict или None."""
+    title_el = card.select_one("a.job-card__title-link")
+    if not title_el:
+        return None
+
+    title = strip_html(title_el.get_text(" ", strip=True))
+    link = (title_el.get("href") or "").strip().split("?")[0].split("#")[0]
+    if not title or len(title) < 3 or not link:
+        return None
+    if not link.startswith("http"):
+        link = "https://www.infopraca.pl" + link
+
+    ad_id = card.get("data-job-card-job-offer-id-value")
+    if not ad_id:
+        m = re.search(r"/(\d+)/?$", link)
+        ad_id = m.group(1) if m else None
+
+    def clean(el):
+        if not el:
+            return None
+        t = re.sub(r"\s+", " ", el.get_text(" ", strip=True).replace("\xa0", " ")).strip()
+        return t or None
+
+    # Первая метка — локация, вторая (если есть) — режим занятости: Full time / Part time / Indifferent
+    metas = [clean(m) for m in card.select("span.job-card__meta-item")]
+    metas = [m for m in metas if m]
+    job_city = clean_infopraca_city(metas[0] if metas else None, search_city)
+    etat_label = metas[1] if len(metas) > 1 else None
+
+    description = clean(card.select_one("p.job-card__description")) or ""
+    badges = clean(card.select_one("div.job-card__badges")) or ""
+
+    # Зарплаты отдельным полем тут нет — ищем в плашках, затем в тексте объявления
+    salary = None
+    for source in (badges, description):
+        if not source:
+            continue
+        m = SALARY_RE.search(source)
+        if m:
+            salary = re.sub(r"\s+", " ", m.group(0)).strip()
+            break
+
+    # Договор и этат ловим по ключевым словам: метка -> текст -> заголовок
+    haystack = " ".join(x for x in [etat_label, badges, description] if x)
+
+    return {
+        "ad_id": ad_id,
+        "title": title,
+        "link": link,
+        "city": job_city,
+        "salary": salary,
+        "umowa": normalize_umowa(badges) or normalize_umowa(description) or normalize_umowa(title),
+        "etat": (normalize_etat(etat_label, salary) if etat_label else None)
+                or normalize_etat(haystack, salary)
+                or normalize_etat(title, salary),
+    }
+
+
+async def parse_infopraca(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
+    try:
+        if not city:
+            return 0
+
+        query = urllib.parse.urlencode({"q": "", "lc": city, "d": 0, "sort": "last_update"})
+        url = f"https://www.infopraca.pl/praca?{query}"
+
+        status, html = await asyncio.to_thread(fetch_url_with_retry, url, "https://www.google.com/")
+        if status != 200 or not html:
+            logger.warning(f"Infopraca returned status {status} for {city}")
+            return 0
+
+        soup = BeautifulSoup(html, "html.parser")
+        cards = soup.select("article.job-card")
+        if not cards:
+            logger.warning(f"⚠️ Infopraca: 0 cards for {city}. Page title: {soup.title.string if soup.title else 'N/A'}")
+            return 0
+
+        jobs_to_save = []
+        ignored_duplicate = 0
+        ignored_city = 0
+        parse_errors = 0
+
+        for card in cards[:50]:
+            try:
+                data = extract_infopraca_card(card, city)
+                if not data:
+                    parse_errors += 1
+                    continue
+
+                job_city = data["city"] or city
+                if not city_matches(job_city, city):
+                    ignored_city += 1
+                    continue
+
+                ext_id = hashlib.md5(f"infopraca_{data['ad_id'] or data['link']}".encode()).hexdigest()
+
+                async with lock:
+                    if ext_id in existing_ids:
+                        ignored_duplicate += 1
+                        continue
+                    existing_ids.add(ext_id)
+
+                jobs_to_save.append({
+                    "external_id": ext_id,
+                    "title": data["title"],
+                    "city": job_city,
+                    "salary": data["salary"],
+                    "url": data["link"],
+                    "source": "Infopraca",
+                    "umowa": data["umowa"],
+                    "etat": data["etat"],
+                })
+            except Exception as e:
+                parse_errors += 1
+                logger.debug(f"Infopraca card error: {e}")
+
+        saved = await db_insert_jobs_batch(jobs_to_save)
+        logger.info(
+            f"Infopraca saved={saved} (cards={len(cards)}, duplicates={ignored_duplicate}, "
+            f"city_mismatch={ignored_city}, errors={parse_errors}) city={city}"
+        )
+        return saved
+    except Exception as e:
+        logger.error(f"parse_infopraca({city}) error: {e}")
+        return 0
+
+
 # ==================== ДИСПЕТЧЕР И MAIN ====================
 
 async def scrape_city_task(city: str, existing_ids: set, semaphore: asyncio.Semaphore, lock: asyncio.Lock) -> int:
@@ -532,7 +1002,10 @@ async def scrape_city_task(city: str, existing_ids: set, semaphore: asyncio.Sema
         results = await asyncio.gather(
             parse_olx(city, existing_ids, lock),
             parse_praca_pl(city, existing_ids, lock),
-            parse_rocketjobs(city, existing_ids, lock)
+            parse_rocketjobs(city, existing_ids, lock),
+            parse_lento(city, existing_ids, lock),
+            parse_fachpraca(city, existing_ids, lock),
+            parse_infopraca(city, existing_ids, lock)
         )
         return sum(results)
 
