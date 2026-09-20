@@ -140,7 +140,7 @@ def fetch_url(url: str, impersonate_target: str = "chrome120", referer: str = No
             url,
             headers=headers,
             impersonate=impersonate_target,
-            timeout=15,
+            timeout=22,
         )
         return r.status_code, r.text
     except Exception as e:
@@ -697,6 +697,13 @@ FACHPRACA_CITY_OVERRIDES = {
     # "Zielona Góra": "zielona-góra",
 }
 
+# Сайт стабильно банит по ASN/IP-репутации (403 на всех профилях браузера) и даже через
+# Cloudflare Worker — то есть это не просто "подобрать заголовки", а либо полноценный
+# JS-челлендж, либо блокировка облачных диапазонов на уровне WAF. Пока нет чистого
+# (не датацентрового) прокси или headless-браузера — гонять его смысла нет, только
+# тратим запросы впустую. Поставь True, если появится решение под это.
+ENABLE_FACHPRACA = False
+
 
 def build_fachpraca_url(city: str) -> str:
     raw = FACHPRACA_CITY_OVERRIDES.get(city) or city.lower().strip().replace(" ", "-")
@@ -764,6 +771,8 @@ def extract_fachpraca_card(card):
 
 
 async def parse_fachpraca(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
+    if not ENABLE_FACHPRACA:
+        return 0
     try:
         if not city:
             return 0
