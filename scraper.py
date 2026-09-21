@@ -8,7 +8,7 @@ import argparse
 import random
 import time
 import unicodedata
-import urllib.parse  # Добавлен импорт для экранирования URL
+import urllib.parse
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -19,14 +19,13 @@ load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-CF_WORKER_URL = os.getenv("CF_WORKER_URL")  # Читаем адрес Cloudflare воркера
+CF_WORKER_URL = os.getenv("CF_WORKER_URL")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Города твоих Telegram-каналов (парсер будет шерстить их ВСЕГВА!)
 CHANNEL_CITIES = [
     "Lublin", "Białystok", "Radom", "Częstochowa", "Gdynia",
     "Poznań", "Rzeszów", "Bydgoszcz"
@@ -152,7 +151,6 @@ def fetch_url(url: str, impersonate_target: str = "chrome120", referer: str = No
 TARGET_BROWSERS = ["chrome120", "chrome110", "edge101", "safari184"]
 
 def fetch_url_with_retry(url: str, referer: str = None):
-    # 1. Пробуем получить страницу стандартным бронебойным путем (через curl_cffi)
     for browser in TARGET_BROWSERS:
         status, html = fetch_url(url, browser, referer)
         if status == 200 and html:
@@ -161,18 +159,15 @@ def fetch_url_with_retry(url: str, referer: str = None):
             logger.warning(f"Got 403 with {browser} for {url}. Retrying with next profile...")
             time.sleep(1.0)
             continue
-        # Если статус не 403 и не 200 (например, 500 или 404), выходим
         if status != 0:
             return status, html
             
-    # 2. АВАРИЙНЫЙ РЕЖИМ (ПЛАН Б): Если все браузеры поймали 403 (блокировка IP), задействуем Cloudflare Worker
     if CF_WORKER_URL:
         try:
             logger.warning(f"🚨 АВАРИЙНЫЙ РЕЖИМ: IP заблокирован. Пробуем пробить через Cloudflare Worker для {url}")
             encoded_url = urllib.parse.quote(url, safe='')
             worker_target_url = f"{CF_WORKER_URL}?url={encoded_url}"
             
-            # Делаем запрос к нашему прокси-воркеру
             status, html = fetch_url(worker_target_url, "chrome120")
             if status == 200 and html:
                 logger.info(f"✅ Cloudflare Worker успешно пробил блокировку для {url}!")
@@ -194,7 +189,7 @@ def get_all_existing_ids() -> set:
         page_size = 1000
         offset = 0
         while True:
-            r = supabase.table("jobs").select("external_id").gt("created_at", cutoff).range(offset, offset + page_size - 1).execute()
+            r = supabase.table("jobs").select("external_id").gt("created_at", cutoff).order("external_id").range(offset, offset + page_size - 1).execute()
             if not r.data:
                 break
             for row in r.data:
@@ -208,6 +203,25 @@ def get_all_existing_ids() -> set:
     except Exception as e:
         logger.error(f"get_all_existing_ids error: {e}")
         return set()
+
+
+def get_rocketjobs_ids_all() -> set:
+    ids = set()
+    try:
+        page_size, offset = 1000, 0
+        while True:
+            r = (supabase.table("jobs").select("external_id").eq("source", "RocketJobs")
+                 .order("external_id").range(offset, offset + page_size - 1).execute())
+            if not r.data:
+                break
+            ids.update(row["external_id"] for row in r.data if row.get("external_id"))
+            if len(r.data) < page_size:
+                break
+            offset += page_size
+        logger.info(f"📦 Loaded {len(ids)} RocketJobs IDs (all ages) for dedup.")
+    except Exception as e:
+        logger.error(f"get_rocketjobs_ids_all error: {e}")
+    return ids
 
 
 def db_insert_jobs_batch_sync(jobs_list: list) -> int:
@@ -231,21 +245,15 @@ async def db_insert_jobs_batch(jobs_list: list) -> int:
 
 
 def get_active_cities_from_db() -> list:
-    """
-    Выбирает города активных юзеров, и ГАРАНТИРОВАННО добавляет города твоих каналов,
-    чтобы они наполнялись контентом 24/7!
-    """
     try:
         r = supabase.table("user_filters").select("city").eq("is_paused", False).execute()
         cities = {row["city"] for row in r.data if row.get("city")}
         
-        # Если кто-то ищет во всей Польше, берем полный базовый список городов
         if "all" in cities:
             final_cities = set(MAIN_SCAN_CITIES)
         else:
             final_cities = cities
             
-        # Гарантированно добавляем города каналов в скан-лист, даже если сработал режим "all"
         for c in CHANNEL_CITIES:
             final_cities.add(c)
             
@@ -415,9 +423,9 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
         return 0
 
 
+# ==================== ROCKETJOBS (ОЧИЩЕННАЯ ДЕДУПЛИКАЦИЯ) ====================
+
 def rj_norm(text) -> str:
-    """Нормализация для ключа дедупликации: без диакритики, регистра, пунктуации и лишних пробелов.
-    ł/Ł не раскладываются через NFKD — заменяем вручную. \\w оставляет любые буквы/цифры (в т.ч. кириллицу)."""
     text = strip_html(text or "")
     text = text.replace("\u0141", "L").replace("\u0142", "l")
     text = unicodedata.normalize("NFKD", text)
@@ -427,7 +435,6 @@ def rj_norm(text) -> str:
 
 
 def rj_company(card) -> str:
-    """Название компании: <p> рядом с иконкой svg.lucide-building (не building-2!)."""
     icon = card.select_one("svg.lucide-building")
     node = icon.parent if icon else None
     for _ in range(3):
@@ -441,9 +448,38 @@ def rj_company(card) -> str:
 
 
 def rj_slug(link: str) -> str:
-    """Слаг из пути ссылки без домена, query, хэша и хвостового слэша."""
     path = urllib.parse.urlparse(link).path
     return path.rstrip("/").rsplit("/", 1)[-1].lower()
+
+
+def rj_offer_id(link: str) -> str:
+    m = re.search(r"-([0-9a-f]{8})$", rj_slug(link))
+    if m and any(ch.isdigit() for ch in m.group(1)):
+        return m.group(1)
+    return ""
+
+
+def rj_ids(link: str, card, title: str):
+    """
+    Чистая дедупликация: ext_id строго без города в хэше,
+    чтобы одна вакансия не плодила дубликаты по городам и категориям.
+    """
+    offer_id = rj_offer_id(link)
+    if offer_id:
+        ext_id = hashlib.md5(f"rocketjobs_{offer_id}".encode("utf-8")).hexdigest()
+    else:
+        title_n = rj_norm(title)
+        company_n = rj_norm(rj_company(card))
+        slug_n = rj_slug(link)
+        content_key = f"{company_n or slug_n}|{title_n}"
+        ext_id = hashlib.md5(f"rocketjobs_{content_key}".encode("utf-8")).hexdigest()
+
+    # Сохраняем мост только со старыми хэшами по полной ссылке
+    legacy_url_hash = hashlib.md5(f"rocketjobs_{link}".encode("utf-8")).hexdigest()
+    bridge_ids = {legacy_url_hash}
+    bridge_ids.discard(ext_id)
+
+    return ext_id, bridge_ids
 
 
 async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
@@ -470,30 +506,16 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                 continue
 
             soup = BeautifulSoup(html, "html.parser")
-            
-            # Находим карточки по стабильному семантическому классу a.offer-card
             offer_links = soup.select("a.offer-card")
             total_found += len(offer_links)
 
             for a in offer_links:
                 try:
-                    # Сайт больше не оборачивает карточки в <li> — раньше здесь было
-                    # a.find_parent("li"), из-за чего 100% карточек улетали в errors,
-                    # даже не доходя до извлечения title. Берём саму ссылку-карточку
-                    # как контейнер; если в ней подозрительно мало текста (похоже,
-                    # это просто обёртка картинки, а не вся карточка) — поднимаемся
-                    # к ближайшему li/article/div-родителю.
                     card = a
                     if len(card.get_text(strip=True)) < 20:
                         card = a.find_parent(["li", "article", "div"]) or a
 
-                    # 1. Заголовок
-                    # Самый надёжный источник — атрибут title на самой карточке-ссылке
-                    # (формат "Zobacz ofertę <Название>"), он не зависит от внутренних
-                    # CSS-классов, которые на сайте похожи на автогенерируемые и могут
-                    # меняться при каждом деплое. Внутренние селекторы — как бонус/уточнение.
                     title = a.get("title", "").replace("Zobacz ofertę", "").strip()
-
                     title_el = card.select_one("a.offer_list_offer_title_link") or card.select_one("h3 a") or card.find("h3")
                     if title_el:
                         inner_title = strip_html(title_el.get_text(strip=True))
@@ -504,7 +526,6 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                         parse_errors += 1
                         continue
 
-                    # 2. Ссылка
                     link = a.get("href", "").strip()
                     if not link and title_el:
                         link = title_el.get("href", "").strip()
@@ -515,13 +536,6 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                         link = "https://rocketjobs.pl" + link
                     link = link.split("?")[0].split("#")[0]
 
-                    # 3. Извлекаем город через иконку svg.lucide-map-pin
-                    # Сама иконка обёрнута в свой собственный <div class="MuiBox-root ...">,
-                    # у которого кроме иконки ничего нет — он тоже подпадает под класс
-                    # "MuiBox|mui-", поэтому find_parent(class_=...) останавливался на этой
-                    # пустой обёртке и loc_text выходил пустым (а .split()[0] на пустой
-                    # строке падал с IndexError). Поднимаемся по предкам, пока не найдём
-                    # такого, где реально есть текст.
                     job_city = city
                     pin_icon = card.select_one("svg.lucide-map-pin")
                     if pin_icon:
@@ -530,7 +544,9 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                         while container is not None and hops < 5:
                             loc_text = strip_html(container.get_text(" ", strip=True))
                             if loc_text:
-                                job_city = loc_text.split(",")[0].split()[0].replace(",", "").strip() or city
+                                extracted_city = loc_text.split(",")[0].split()[0].replace(",", "").strip()
+                                if extracted_city:
+                                    job_city = extracted_city
                                 break
                             container = container.parent
                             hops += 1
@@ -538,14 +554,7 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                     if not city_matches(job_city, city):
                         continue
 
-                    # ID = компания + название + город карточки. URL в ключе НЕ участвует:
-                    # слаг у RocketJobs = компания + название + город + категория оффера
-                    # (см. href карточки), т.е. меняется при смене города/категории, а поля — нет.
-                    # Если компанию достать не удалось — берём слаг из URL как запасной "идентификатор".
-                    identity = rj_norm(rj_company(card)) or rj_slug(link)
-                    ext_id = hashlib.md5(
-                        f"rocketjobs2|{identity}|{rj_norm(title)}|{rj_norm(job_city)}".encode("utf-8")
-                    ).hexdigest()
+                    ext_id, bridge_ids = rj_ids(link, card, title)
 
                     if ext_id in seen_this_run:
                         dupes_in_run += 1
@@ -553,12 +562,11 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                     seen_this_run.add(ext_id)
 
                     async with lock:
-                        if ext_id in existing_ids:
+                        if ext_id in existing_ids or any(b in existing_ids for b in bridge_ids):
                             already_in_db += 1
                             continue
                         existing_ids.add(ext_id)
 
-                    # 4. Извлекаем зарплату через Regex
                     card_full_text = card.get_text(" ", strip=True)
                     salary = None
                     if "nieujawnione" not in card_full_text.lower():
@@ -592,22 +600,16 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
 
 # ==================== LENTO.PL ====================
 
-# Если у какого-то города поддомен на Lento отличается от обычного slug — добавь сюда.
-# Формат: "slug из get_city_slug": "поддомен на lento.pl"
-LENTO_SUBDOMAIN_OVERRIDES = {
-    # "zielona-gora": "zielonagora",
-}
+LENTO_SUBDOMAIN_OVERRIDES = {}
 
 
 def is_lento_promo(card) -> bool:
-    """Промо-объявление: класс tablelist-tr-promo или плашка 'Promowane'."""
     if "tablelist-tr-promo" in (card.get("class") or []):
         return True
     return card.select_one(".promo-label") is not None
 
 
 def extract_lento_card(card):
-    """Разбирает одну карточку Lento. Возвращает dict с полями или None, если карточка битая."""
     title_el = card.select_one("a.title-list-item")
     if not title_el:
         return None
@@ -619,21 +621,18 @@ def extract_lento_card(card):
     if not link.startswith("http"):
         link = "https://lento.pl" + link
 
-    # Стабильный id объявления: data-id на карточке, запасной вариант — число в конце ссылки
     ad_id = card.get("data-id")
     if not ad_id:
         m = re.search(r",(\d+)\.html$", link)
         ad_id = m.group(1) if m else None
 
-    # Город
     job_city = None
     loc_el = card.select_one(".licon-pin-f")
     if loc_el:
         loc_text = re.sub(r"\s+", " ", loc_el.get_text(" ", strip=True)).strip()
-        m = re.search(r"\(([^)]+)\)", loc_text)  # формат "Cała Polska (Wrocław)"
+        m = re.search(r"\(([^)]+)\)", loc_text)
         job_city = (m.group(1) if m else loc_text).strip() or None
 
-    # Зарплата: "4 806 zł /mies. brutto" или "od 4806 zł do 5100 zł /mies. brutto"
     salary = None
     sal_el = card.select_one("div.param-list-row div.padding-top-2")
     if sal_el:
@@ -641,7 +640,6 @@ def extract_lento_card(card):
         if re.search(r"\d", sal_text):
             salary = sal_text
 
-    # Теги: [Категория(ссылка), "Pełny etat", "Umowa o pracę"] — категорию (с <a>) пропускаем
     tabs = [
         t.get_text(" ", strip=True)
         for t in card.select("span.list-atrr-item-tab")
@@ -687,7 +685,6 @@ async def parse_lento(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
 
         for card in cards:
             try:
-                # Promowane — выкидываем сразу
                 if is_lento_promo(card):
                     ignored_promo += 1
                     continue
@@ -737,17 +734,7 @@ async def parse_lento(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
 
 # ==================== FACHPRACA.PL ====================
 
-# На Fachpraca город в URL пишется польскими буквами: /oferty-pracy/l/toruń/
-# Если у какого-то города адрес отличается — впиши сюда готовый кусок URL.
-FACHPRACA_CITY_OVERRIDES = {
-    # "Zielona Góra": "zielona-góra",
-}
-
-# Сайт стабильно банит по ASN/IP-репутации (403 на всех профилях браузера) и даже через
-# Cloudflare Worker — то есть это не просто "подобрать заголовки", а либо полноценный
-# JS-челлендж, либо блокировка облачных диапазонов на уровне WAF. Пока нет чистого
-# (не датацентрового) прокси или headless-браузера — гонять его смысла нет, только
-# тратим запросы впустую. Поставь True, если появится решение под это.
+FACHPRACA_CITY_OVERRIDES = {}
 ENABLE_FACHPRACA = False
 
 
@@ -757,13 +744,11 @@ def build_fachpraca_url(city: str) -> str:
 
 
 def is_fachpraca_promo(card) -> bool:
-    """Выделенные/промо-объявления: любой класс-модификатор кроме базового job-list__offer."""
     classes = [c for c in (card.get("class") or []) if c != "job-list__offer"]
     return any(x in " ".join(classes).lower() for x in ["promo", "wyroznion", "wyróżnion", "featured", "highlight", "top"])
 
 
 def extract_fachpraca_card(card):
-    """Разбирает одну карточку Fachpraca (li.job-list__offer). Возвращает dict или None."""
     title_el = card.select_one("a.job-list__job-name")
     if not title_el:
         return None
@@ -775,7 +760,6 @@ def extract_fachpraca_card(card):
     if not link.startswith("http"):
         link = "https://www.fachpraca.pl" + link
 
-    # Стабильный id: data-secret у кнопки "Obserwuj", запасной вариант — число в конце ссылки
     ad_id = None
     btn = card.select_one("button.job-list__watch[data-secret]")
     if btn:
@@ -794,12 +778,10 @@ def extract_fachpraca_card(card):
 
     job_city = text_of("p.job-list__job-location")
 
-    # Зарплата: "od 4 806,00 do 5 600,00 PLN miesięcznie brutto"
     salary = text_of("p.job-list__job-pay")
     if salary and not re.search(r"\d", salary):
         salary = None
 
-    # Условия: [должность, категория, тип договора, этат] — например "umowa o pracę", "pełny etat"
     conditions = " ".join(
         re.sub(r"\s+", " ", li.get_text(" ", strip=True))
         for li in card.select("ul.job-list__conditions li")
@@ -829,7 +811,6 @@ async def parse_fachpraca(city: str, existing_ids: set, lock: asyncio.Lock) -> i
         soup = BeautifulSoup(html, "html.parser") if (status == 200 and html) else None
         cards = soup.select("li.job-list__offer") if soup else []
 
-        # Запасной вариант для составных названий: пробелы вместо дефиса ("zielona góra")
         if not cards and " " in city.strip() and city not in FACHPRACA_CITY_OVERRIDES:
             alt_url = f"https://www.fachpraca.pl/oferty-pracy/l/{urllib.parse.quote(city.lower().strip())}/"
             logger.info(f"Fachpraca: пробуем запасной URL для {city}: {alt_url}")
@@ -904,7 +885,6 @@ async def parse_fachpraca(city: str, existing_ids: set, lock: asyncio.Lock) -> i
 
 # ==================== INFOPRACA.PL ====================
 
-# Воеводства, которые приезжают хвостом в строке локации и городом не являются
 POLISH_VOIVODESHIPS = {
     "dolnośląskie", "kujawsko-pomorskie", "lubelskie", "lubuskie", "łódzkie",
     "małopolskie", "mazowieckie", "opolskie", "podkarpackie", "podlaskie",
@@ -912,7 +892,6 @@ POLISH_VOIVODESHIPS = {
     "wielkopolskie", "zachodniopomorskie",
 }
 
-# Зарплата в тексте: "4 806 zł brutto/mies", "5000-6000 PLN", "2 600 € netto"
 SALARY_RE = re.compile(
     r"\d[\d\s\u00a0.,]*(?:\s*[-–]\s*\d[\d\s\u00a0.,]*)?\s*(?:zł|pln|eur|€)"
     r"(?:\s*(?:brutto|netto))?(?:\s*/\s*[a-ząćęłńóśźż.]+)?",
@@ -921,18 +900,16 @@ SALARY_RE = re.compile(
 
 
 def clean_infopraca_city(loc_text: str, search_city: str):
-    """'65-548 Zielona Góra, lubuskie' / 'Zielona Góra, Gorzów Wielkopolski, lubuskie' -> город."""
     if not loc_text:
         return None
     parts = []
     for chunk in loc_text.split(","):
-        chunk = re.sub(r"\b\d{2}-\d{3}\b", "", chunk).strip()  # убираем почтовый индекс
+        chunk = re.sub(r"\b\d{2}-\d{3}\b", "", chunk).strip()
         if not chunk or chunk.lower() in POLISH_VOIVODESHIPS:
             continue
         parts.append(chunk)
     if not parts:
         return None
-    # Если объявление на несколько городов, берём тот, который мы и искали
     for part in parts:
         if city_matches(part, search_city):
             return part
@@ -940,7 +917,6 @@ def clean_infopraca_city(loc_text: str, search_city: str):
 
 
 def extract_infopraca_card(card, search_city: str):
-    """Разбирает одну карточку Infopraca (article.job-card). Возвращает dict или None."""
     title_el = card.select_one("a.job-card__title-link")
     if not title_el:
         return None
@@ -963,7 +939,6 @@ def extract_infopraca_card(card, search_city: str):
         t = re.sub(r"\s+", " ", el.get_text(" ", strip=True).replace("\xa0", " ")).strip()
         return t or None
 
-    # Первая метка — локация, вторая (если есть) — режим занятости: Full time / Part time / Indifferent
     metas = [clean(m) for m in card.select("span.job-card__meta-item")]
     metas = [m for m in metas if m]
     job_city = clean_infopraca_city(metas[0] if metas else None, search_city)
@@ -972,7 +947,6 @@ def extract_infopraca_card(card, search_city: str):
     description = clean(card.select_one("p.job-card__description")) or ""
     badges = clean(card.select_one("div.job-card__badges")) or ""
 
-    # Зарплаты отдельным полем тут нет — ищем в плашках, затем в тексте объявления
     salary = None
     for source in (badges, description):
         if not source:
@@ -982,7 +956,6 @@ def extract_infopraca_card(card, search_city: str):
             salary = re.sub(r"\s+", " ", m.group(0)).strip()
             break
 
-    # Договор и этат ловим по ключевым словам: метка -> текст -> заголовок
     haystack = " ".join(x for x in [etat_label, badges, description] if x)
 
     return {
@@ -1087,10 +1060,8 @@ async def main():
     parser.add_argument("--city", type=str, default=None)
     args = parser.parse_args()
 
-    # Очистка базы полностью передана боту (крон 03:00 UTC в bot.py).
-    # Парсер работает как спецназ: залетел ➔ собрал свежак ➔ ушёл.
-
     existing_ids = get_all_existing_ids()
+    existing_ids |= get_rocketjobs_ids_all()
     cities = [args.city] if args.city else (get_active_cities_from_db() or MAIN_SCAN_CITIES[:5])
 
     city_sem = asyncio.Semaphore(3)
