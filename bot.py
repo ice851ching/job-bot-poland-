@@ -22,7 +22,7 @@ from aiogram.types import (
     WebAppInfo, BufferedInputFile, LabeledPrice, PreCheckoutQuery
 )
 from aiogram.filters import Command, CommandObject
-from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
+from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter, TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -211,7 +211,7 @@ TEXTS = {
             f"<b>{BTN_RESET}</b> — настроить фильтры заново\n"
             f"<b>{BTN_STOP}</b> — остановить рассылку\n"
             f"<b>{BTN_HELP}</b> — эта справка\n"
-            "<b>/vip</b> — ⭐ VIP-версия: 5 сайтов вместо 3 и поиск без остановок\n"
+            "<b>/vip</b> — ⭐ VIP-версия: 5 сайтов вместо 3, поиск без остановок и стильные шаблоны резюме\n"
             "<b>#⃣ Создать резюме</b> — конструктор резюме с моментальным получением PDF в чат (лимит: 3 резюме в день)\n\n"
             "По вопросам и сотрудничеству: @Hriaker1"
         ),
@@ -235,7 +235,7 @@ TEXTS = {
             "⭐ <b>Хочешь больше вакансий?</b>\n\n"
             "С <b>VIP</b> бот ищет на <b>5 сайтах вместо 3</b> — добавляются "
             "<b>Lento.pl</b> и <b>Infopraca.pl</b>, а поиск работает "
-            "<b>без остановок каждые 3 дня</b>.\n\n"
+            "<b>без остановок каждые 3 дня</b>. А ещё — <b>стильные VIP-шаблоны резюме</b>.\n\n"
             "💰 <b>{price} ⭐ = {days} дней VIP</b>\n\n"
             "👇 Подробнее — кнопка ниже или команда /vip"
         ),
@@ -248,10 +248,11 @@ TEXTS = {
             "   🔹 <b>Infopraca.pl</b> — польский портал вакансий: предложения от работодателей "
             "и агентств по всей Польше.\n"
             "• <b>Поиск без остановок</b> — в бесплатном плане поиск нужно подтверждать каждые 3 дня, "
-            "в VIP этого нет.\n\n"
+            "в VIP этого нет.\n"
+            "• <b>Стильные шаблоны резюме</b> — в конструкторе резюме (#⃣) открываются эксклюзивные VIP-шаблоны с более современным дизайном.\n\n"
             "<b>Сравнение:</b>\n"
-            "🆓 Бесплатно: OLX, Praca.pl, RocketJobs + подтверждение каждые 3 дня\n"
-            "⭐ VIP: OLX, Praca.pl, RocketJobs + Lento.pl + Infopraca.pl, без остановок\n\n"
+            "🆓 Бесплатно: OLX, Praca.pl, RocketJobs + подтверждение каждые 3 дня + базовые шаблоны резюме\n"
+            "⭐ VIP: OLX, Praca.pl, RocketJobs + Lento.pl + Infopraca.pl, без остановок + стильные шаблоны резюме\n\n"
             "💰 <b>Цена: {price} ⭐ Telegram Stars за {days} дней VIP.</b>\n"
             "Разовый платёж, автопродления нет."
         ),
@@ -260,13 +261,13 @@ TEXTS = {
         "btn_extend_vip": "⭐ Продлить на {days} дней — {price} ⭐",
         "btn_vip_details": "ℹ️ Подробнее про VIP",
         "vip_invoice_title": "VIP на {days} дней",
-        "vip_invoice_desc": "5 сайтов вместо 3 (+ Lento.pl и Infopraca.pl) и поиск без остановок каждые 3 дня. Срок действия — {days} дней.",
+        "vip_invoice_desc": "5 сайтов вместо 3 (+ Lento.pl и Infopraca.pl) и поиск без остановок каждые 3 дня + стильные шаблоны резюме. Срок действия — {days} дней.",
         "vip_invoice_label": "VIP {days} дней",
         "vip_thanks": (
             "🎉 <b>Оплата прошла — VIP активирован!</b>\n\n"
             "VIP действует до <b>{until}</b>.\n"
             "Теперь бот ищет на 5 сайтах (добавились Lento.pl и Infopraca.pl) "
-            "и не останавливается каждые 3 дня. Спасибо за поддержку! ⭐"
+            "и не останавливается каждые 3 дня. Также тебе открылись стильные VIP-шаблоны резюме. Спасибо за поддержку! ⭐"
         ),
         "vip_pay_error": "⚠️ Оплата прошла, но при активации VIP возникла ошибка. Напиши @Hriaker1 — всё быстро исправим.",
         "paysupport": "💬 По вопросам оплаты пиши: @Hriaker1\nУкажи свой Telegram ID и время платежа.",
@@ -304,7 +305,7 @@ TEXTS = {
             f"<b>{BTN_RESET}</b> — ustaw filtry od nowa\n"
             f"<b>{BTN_STOP}</b> — zatrzymaj wysyłkę\n"
             f"<b>{BTN_HELP}</b> — ta pomoc\n"
-            "<b>/vip</b> — ⭐ wersja VIP: 5 serwisów zamiast 3 i wyszukiwanie bez przerw\n"
+            "<b>/vip</b> — ⭐ wersja VIP: 5 serwisów zamiast 3, wyszukiwanie bez przerw i stylowe szablony CV\n"
             "<b>#⃣ Stwórz CV</b> — kreator CV z bezpośrednim przesłaniem PDF (limit: 3 na dobę)\n\n"
             "Pytania i współpraca: @Hriaker1"
         ),
@@ -327,7 +328,7 @@ TEXTS = {
             "⭐ <b>Chcesz więcej ofert?</b>\n\n"
             "Z <b>VIP</b> bot szuka na <b>5 serwisach zamiast 3</b> — dochodzą "
             "<b>Lento.pl</b> i <b>Infopraca.pl</b>, a wyszukiwanie działa "
-            "<b>bez przerw co 3 dni</b>.\n\n"
+            "<b>bez przerw co 3 dni</b>. Do tego — <b>stylowe szablony CV VIP</b>.\n\n"
             "💰 <b>{price} ⭐ = {days} dni VIP</b>\n\n"
             "👇 Szczegóły — przycisk poniżej lub komenda /vip"
         ),
@@ -340,10 +341,11 @@ TEXTS = {
             "   🔹 <b>Infopraca.pl</b> — polski portal z ofertami pracy od pracodawców "
             "i agencji z całej Polski.\n"
             "• <b>Wyszukiwanie bez przerw</b> — w wersji darmowej trzeba co 3 dni potwierdzać "
-            "wyszukiwanie, w VIP nie.\n\n"
+            "wyszukiwanie, w VIP nie.\n"
+            "• <b>Stylowe szablony CV</b> — w kreatorze CV (#⃣) odblokowują się ekskluzywne szablony VIP o nowocześniejszym designie.\n\n"
             "<b>Porównanie:</b>\n"
-            "🆓 Darmowa: OLX, Praca.pl, RocketJobs + potwierdzenie co 3 dni\n"
-            "⭐ VIP: OLX, Praca.pl, RocketJobs + Lento.pl + Infopraca.pl, bez przerw\n\n"
+            "🆓 Darmowa: OLX, Praca.pl, RocketJobs + potwierdzenie co 3 dni + podstawowe szablony CV\n"
+            "⭐ VIP: OLX, Praca.pl, RocketJobs + Lento.pl + Infopraca.pl, bez przerw + stylowe szablony CV\n\n"
             "💰 <b>Cena: {price} ⭐ Telegram Stars za {days} dni VIP.</b>\n"
             "Płatność jednorazowa, bez automatycznego odnawiania."
         ),
@@ -352,13 +354,13 @@ TEXTS = {
         "btn_extend_vip": "⭐ Przedłuż o {days} dni — {price} ⭐",
         "btn_vip_details": "ℹ️ Więcej o VIP",
         "vip_invoice_title": "VIP na {days} dni",
-        "vip_invoice_desc": "5 serwisów zamiast 3 (+ Lento.pl i Infopraca.pl) i wyszukiwanie bez przerw co 3 dni. Okres ważności — {days} dni.",
+        "vip_invoice_desc": "5 serwisów zamiast 3 (+ Lento.pl i Infopraca.pl) i wyszukiwanie bez przerw co 3 dni + stylowe szablony CV. Okres ważności — {days} dni.",
         "vip_invoice_label": "VIP {days} dni",
         "vip_thanks": (
             "🎉 <b>Płatność przyjęta — VIP aktywowany!</b>\n\n"
             "VIP działa do <b>{until}</b>.\n"
             "Bot szuka teraz na 5 serwisach (doszły Lento.pl i Infopraca.pl) "
-            "i nie zatrzymuje się co 3 dni. Dziękuję za wsparcie! ⭐"
+            "i nie zatrzymuje się co 3 dni. Odblokowały się też stylowe szablony CV VIP. Dziękuję za wsparcie! ⭐"
         ),
         "vip_pay_error": "⚠️ Płatność przeszła, ale wystąpił błąd przy aktywacji VIP. Napisz do @Hriaker1 — szybko to naprawimy.",
         "paysupport": "💬 W sprawie płatności pisz: @Hriaker1\nPodaj swoje Telegram ID i czas płatności.",
@@ -396,7 +398,7 @@ TEXTS = {
             f"<b>{BTN_RESET}</b> — налаштувати фільтри заново\n"
             f"<b>{BTN_STOP}</b> — зупинити розсилку\n"
             f"<b>{BTN_HELP}</b> — ця довідка\n"
-            "<b>/vip</b> — ⭐ VIP-версія: 5 сайтів замість 3 і пошук без зупинок\n"
+            "<b>/vip</b> — ⭐ VIP-версія: 5 сайтів замість 3, пошук без зупинок і стильні шаблони резюме\n"
             "<b>#⃣ Створити резюме</b> — конструктор резюме з миттєвим отриманням PDF в чаті (ліміт: 3 на день)\n\n"
             "Питання та співпраця: @Hriaker1"
         ),
@@ -419,7 +421,7 @@ TEXTS = {
             "⭐ <b>Хочеш більше вакансій?</b>\n\n"
             "З <b>VIP</b> бот шукає на <b>5 сайтах замість 3</b> — додаються "
             "<b>Lento.pl</b> та <b>Infopraca.pl</b>, а пошук працює "
-            "<b>без зупинок кожні 3 дні</b>.\n\n"
+            "<b>без зупинок кожні 3 дні</b>. А ще — <b>стильні VIP-шаблони резюме</b>.\n\n"
             "💰 <b>{price} ⭐ = {days} днів VIP</b>\n\n"
             "👇 Докладніше — кнопка нижче або команда /vip"
         ),
@@ -432,10 +434,11 @@ TEXTS = {
             "   🔹 <b>Infopraca.pl</b> — польський портал вакансій: пропозиції від роботодавців "
             "та агенцій по всій Польщі.\n"
             "• <b>Пошук без зупинок</b> — у безкоштовному плані пошук треба підтверджувати кожні 3 дні, "
-            "у VIP цього немає.\n\n"
+            "у VIP цього немає.\n"
+            "• <b>Стильні шаблони резюме</b> — у конструкторі резюме (#⃣) відкриваються ексклюзивні VIP-шаблони з сучаснішим дизайном.\n\n"
             "<b>Порівняння:</b>\n"
-            "🆓 Безкоштовно: OLX, Praca.pl, RocketJobs + підтвердження кожні 3 дні\n"
-            "⭐ VIP: OLX, Praca.pl, RocketJobs + Lento.pl + Infopraca.pl, без зупинок\n\n"
+            "🆓 Безкоштовно: OLX, Praca.pl, RocketJobs + підтвердження кожні 3 дні + базові шаблони резюме\n"
+            "⭐ VIP: OLX, Praca.pl, RocketJobs + Lento.pl + Infopraca.pl, без зупинок + стильні шаблони резюме\n\n"
             "💰 <b>Ціна: {price} ⭐ Telegram Stars за {days} днів VIP.</b>\n"
             "Разовий платіж, без автопродовження."
         ),
@@ -444,13 +447,13 @@ TEXTS = {
         "btn_extend_vip": "⭐ Продовжити на {days} днів — {price} ⭐",
         "btn_vip_details": "ℹ️ Докладніше про VIP",
         "vip_invoice_title": "VIP на {days} днів",
-        "vip_invoice_desc": "5 сайтів замість 3 (+ Lento.pl та Infopraca.pl) і пошук без зупинок кожні 3 дні. Термін дії — {days} днів.",
+        "vip_invoice_desc": "5 сайтів замість 3 (+ Lento.pl та Infopraca.pl) і пошук без зупинок кожні 3 дні + стильні шаблони резюме. Термін дії — {days} днів.",
         "vip_invoice_label": "VIP {days} днів",
         "vip_thanks": (
             "🎉 <b>Оплата пройшла — VIP активовано!</b>\n\n"
             "VIP діє до <b>{until}</b>.\n"
             "Тепер бот шукає на 5 сайтах (додалися Lento.pl та Infopraca.pl) "
-            "і не зупиняється кожні 3 дні. Дякую за підтримку! ⭐"
+            "і не зупиняється кожні 3 дні. Також тобі відкрилися стильні VIP-шаблони резюме. Дякую за підтримку! ⭐"
         ),
         "vip_pay_error": "⚠️ Оплата пройшла, але під час активації VIP сталася помилка. Напиши @Hriaker1 — швидко все виправимо.",
         "paysupport": "💬 З питань оплати пиши: @Hriaker1\nВкажи свій Telegram ID і час платежу.",
@@ -686,6 +689,46 @@ def db_get_all_active_users():
     except Exception as e:
         logger.error(f"db_get_all_active_users error: {e}")
         return []
+
+
+def db_get_city_audience():
+    """
+    Аудитория для таргетированной рассылки: {slug: {"label": str, "ids": [telegram_id, ...]}}.
+    Берутся только живые пользователи (telegram_id > 0, is_active=True) с сохранённым фильтром.
+    Города группируются по slug ("Wrocław" и "wroclaw" — один город), city='all' -> slug 'all'.
+    При ошибке БД возвращает None.
+    """
+    from collections import Counter
+    try:
+        active = set(db_get_all_active_users())
+        rows, offset, page = [], 0, 1000
+        while True:
+            r = supabase.table("user_filters").select("telegram_id, city").range(offset, offset + page - 1).execute()
+            if not r.data:
+                break
+            rows.extend(r.data)
+            if len(r.data) < page:
+                break
+            offset += page
+    except Exception as e:
+        logger.error(f"db_get_city_audience error: {e}")
+        return None
+
+    groups = {}
+    for row in rows:
+        tid = row.get("telegram_id")
+        if not tid or tid < 0 or tid not in active:
+            continue
+        raw = (row.get("city") or "all").strip() or "all"
+        slug = get_city_slug(raw)
+        g = groups.setdefault(slug, {"ids": set(), "names": Counter()})
+        g["ids"].add(tid)
+        g["names"][raw] += 1
+
+    return {
+        slug: {"label": g["names"].most_common(1)[0][0], "ids": sorted(g["ids"])}
+        for slug, g in groups.items()
+    }
 
 
 def db_get_sent_job_ids(tid) -> set:
@@ -1097,10 +1140,43 @@ async def start_web_server():
 
 # ==================== FORMAT & SEND ====================
 
+# Текст кнопки со ссылкой на вакансию (единый для всех сообщений)
+JOB_BUTTON_TEXT = "🔗 Перейти к объявлению"
+
+
+def is_valid_job_url(url) -> bool:
+    """Telegram принимает в url-кнопках только http(s)-ссылки с доменом, до 2048 символов."""
+    if not url or not isinstance(url, str):
+        return False
+    url = url.strip()
+    if not url or len(url) > 2048:
+        return False
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception:
+        return False
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
+def get_job_keyboard(job_url, button_text: str = JOB_BUTTON_TEXT):
+    """
+    Собирает inline-клавиатуру с одной кнопкой-ссылкой.
+    Возвращает None, если ссылка пустая/битая — тогда сообщение уходит просто без кнопки.
+    Универсальный билдер: можно использовать и для одиночных вакансий, и для дайджестов.
+    """
+    if not is_valid_job_url(job_url):
+        return None
+    safe_url = job_url.strip().replace(" ", "%20")
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=button_text, url=safe_url)
+    ]])
+
+
 def format_job(job):
     """
-    Премиальный UX-дизайн: Заголовок сверху, все подробности внутри аккуратной цитаты blockquote,
-    ссылки снизу. Безопасное экранирование спецсимволов HTML через html.escape.
+    Карточка вакансии: заголовок сверху, все подробности внутри цитаты blockquote.
+    Ссылки на вакансию в тексте нет — она вынесена в inline-кнопку (см. get_job_keyboard).
+    Спецсимволы HTML экранируются через html.escape.
     """
     def clean(text):
         if not text:
@@ -1108,11 +1184,10 @@ def format_job(job):
         cleaned = strip_html(str(text))
         return html.escape(cleaned)
 
-    title = clean(job.get('title', 'Без названия'))
+    title = clean(job.get('title')) or "Без названия"
     ut = UMOWY_DISPLAY.get(job.get("umowa")) or job.get("umowa")
     et = ETAT_DISPLAY.get(job.get("etat")) or job.get("etat")
 
-    # Собираем данные вакансии, которые будут внутри ЦИТАТЫ (плашки с чертой слева)
     details = []
     if ut:
         details.append(f"📄 {clean(ut)}")
@@ -1122,22 +1197,52 @@ def format_job(job):
         details.append(f"📍 {clean(job['city'])}")
     if job.get("salary"):
         details.append(f"💰 {clean(job['salary'])}")
-    
-    details.append(f"📌 {clean(job.get('source', '—'))}")
+
+    details.append(f"📌 {clean(job.get('source')) or '—'}")
 
     quote_content = "\n".join(details)
-    
-    url = job.get('url', '')
-    url_line = f"🔗 <a href='{html.escape(url)}'>Zobacz ofertę</a>" if url else ""
 
     message = (
         f"💼 <b>{title}</b>\n\n"
         f"<blockquote>{quote_content}</blockquote>\n\n"
-        f"{url_line}\n\n"
-        f"🤖 <a href='https://t.me/szukam_pracy_bot'>@szukam_pracy_bot</a> — Świeże oferty pracy w <a href='https://t.me/szukam_pracy_bot'>Polsce 🇵🇱</a>"
+        f"<a href='https://t.me/szukam_pracy_bot'>@szukam_pracy_bot</a> — Świeże oferty pracy w Polsce 🇵🇱"
     )
 
     return message.strip()
+
+
+async def send_job_card(chat_id, job, **kwargs):
+    """
+    Отправляет карточку вакансии с кнопкой-ссылкой.
+    Если ссылка битая/отсутствует — шлёт без кнопки.
+    Если Telegram всё же отклонил кнопку (BUTTON_URL_INVALID) — повторяет отправку без неё.
+    Остальные ошибки (RetryAfter, Forbidden и т.д.) пробрасываются наверх как раньше.
+    """
+    url = job.get("url")
+    kb = get_job_keyboard(url)
+    if kb is None:
+        logger.warning(f"Job {job.get('id')}: invalid or missing url ({url!r}), sending without button")
+
+    try:
+        return await bot.send_message(
+            chat_id,
+            format_job(job),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=kb,
+            **kwargs,
+        )
+    except TelegramBadRequest as e:
+        if kb is not None and "BUTTON_URL_INVALID" in str(e).upper():
+            logger.warning(f"Job {job.get('id')}: Telegram rejected button url {url!r}, resending without button")
+            return await bot.send_message(
+                chat_id,
+                format_job(job),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                **kwargs,
+            )
+        raise
 
 
 async def send_promo(chat_id, lang="ru"):
@@ -1200,12 +1305,7 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
                 continue
 
             try:
-                await bot.send_message(
-                    tid,
-                    format_job(job),
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
+                await send_job_card(tid, job)
                 sent_job_ids_batch.append(job_id)
                 already_sent_ids.add(job_id)
                 sent += 1
@@ -1217,12 +1317,7 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
                 logger.warning(f"Telegram rate limit for {tid}; sleeping {retry_after}s")
                 await asyncio.sleep(retry_after)
                 try:
-                    await bot.send_message(
-                        tid,
-                        format_job(job),
-                        parse_mode="HTML",
-                        disable_web_page_preview=True,
-                    )
+                    await send_job_card(tid, job)
                     sent_job_ids_batch.append(job_id)
                     already_sent_ids.add(job_id)
                     sent += 1
@@ -1324,13 +1419,7 @@ async def post_jobs_to_channels():
                 if sent_count < limit:
                     # Отправляем только до достижения лимита
                     try:
-                        await bot.send_message(
-                            chat_id=channel_id,
-                            text=format_job(job),
-                            parse_mode="HTML",
-                            disable_web_page_preview=True,
-                            message_thread_id=thread_id
-                        )
+                        await send_job_card(channel_id, job, message_thread_id=thread_id)
                         sent_job_ids_batch.append(job_id)
                         already_sent_ids.add(job_id)
                         sent_count += 1
@@ -1425,18 +1514,81 @@ def kb_vip_buy(lang, is_vip=False):
     ])
 
 
+def kb_admin_confirm():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Всем (все города + все каналы)", callback_data="admin_send")],
+        [InlineKeyboardButton(text="🎯 По городам", callback_data="admin_cities")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel")],
+    ])
+
+
+def build_city_options(audience: dict) -> list:
+    """Список городов для выбора: города пользователей + города каналов-сателлитов (даже если людей там 0)."""
+    channel_by_slug = {get_city_slug(c): c for c in CHANNELS_MAPPING}
+    opts = []
+    for slug, g in audience.items():
+        label = "🇵🇱 Вся Польша" if slug == "all" else (channel_by_slug.get(slug) or g["label"])
+        opts.append({"slug": slug, "label": label, "ids": list(g["ids"]), "channel": slug in channel_by_slug})
+    for slug, city in channel_by_slug.items():
+        if slug not in audience:
+            opts.append({"slug": slug, "label": city, "ids": [], "channel": True})
+    opts.sort(key=lambda o: (-len(o["ids"]), o["label"].lower()))
+    return opts[:90]  # лимит Telegram — 100 кнопок на клавиатуру
+
+
+def admin_city_targets(opts: list, sel):
+    """По выбранным индексам возвращает (список user_id без дублей, список городов-каналов, список названий)."""
+    chosen = [opts[i] for i in sorted(sel) if 0 <= i < len(opts)]
+    users = sorted({uid for o in chosen for uid in o["ids"]})
+    channels = [o["label"] for o in chosen if o["channel"]]
+    return users, channels, [o["label"] for o in chosen]
+
+
+def kb_admin_cities(opts: list, sel):
+    rows, row = [], []
+    for i, o in enumerate(opts):
+        mark = "✅" if i in sel else "☐"
+        tv = " 📺" if o["channel"] else ""
+        row.append(InlineKeyboardButton(
+            text=f"{mark} {o['label']} ({len(o['ids'])}){tv}",
+            callback_data=f"adm_ct_{i}"
+        ))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    users, channels, _ = admin_city_targets(opts, sel)
+    rows.append([InlineKeyboardButton(
+        text=f"🚀 Отправить ({len(users)} чел. + {len(channels)} 📺)",
+        callback_data="admin_send_cities"
+    )])
+    rows.append([
+        InlineKeyboardButton(text="◀️ Назад", callback_data="admin_back"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 # ==================== BROADCASTER ====================
 
-async def run_broadcast(bot: Bot, admin_id: int, from_chat_id: int, message_id: int, users: list):
+async def run_broadcast(bot: Bot, admin_id: int, from_chat_id: int, message_id: int, users: list,
+                        channels: list = None, audience_note: str = ""):
     """
     Рассылка рекламы: Сначала мгновенно публикует во всех каналах сателлитах,
     а затем плавно рассылает всем активным пользователям в ЛС с подробным отчетом админу.
     """
     sent_users, failed_users = 0, 0
     sent_channels, failed_channels = 0, 0
+
+    # channels=None -> все каналы (как раньше); иначе только каналы указанных городов
+    channel_items = [
+        (c, cfg) for c, cfg in CHANNELS_MAPPING.items()
+        if channels is None or c in channels
+    ]
     
     logger.info("📢 Copying broadcast post to all satellite channels...")
-    for city, config in CHANNELS_MAPPING.items():
+    for city, config in channel_items:
         try:
             channel_id = config["id"]
             thread_id = config.get("thread_id", None)
@@ -1465,12 +1617,14 @@ async def run_broadcast(bot: Bot, admin_id: int, from_chat_id: int, message_id: 
     try:
         await bot.send_message(
             admin_id,
-            f"📢 <b>Рассылка успешно завершена!</b>\n\n"
+            f"📢 <b>Рассылка успешно завершена!</b>\n"
+            + (f"🎯 Города: {html.escape(audience_note)}\n" if audience_note else "")
+            + "\n"
             f"<b>👥 Пользователи в ЛС:</b>\n"
             f"✅ Получили: {sent_users}\n"
             f"❌ Заблокировали: {failed_users}\n\n"
             f"<b>📺 Каналы-сателлиты:</b>\n"
-            f"✅ Опубликовано: {sent_channels} из {len(CHANNELS_MAPPING)}\n"
+            f"✅ Опубликовано: {sent_channels} из {len(channel_items)}\n"
             f"❌ Ошибки: {failed_channels}"
         )
     except Exception:
@@ -1586,10 +1740,7 @@ async def admin_get_ad(m: Message, state: FSMContext):
     try:
         await state.update_data(ad_msg_id=m.message_id, ad_chat_id=m.chat.id)
         await state.set_state(AdminStates.confirm_ad)
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Начать рассылку", callback_data="admin_send")],
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel")]
-        ])
+        kb = kb_admin_confirm()
         await m.answer("👇 <b>Превью поста:</b>")
         await bot.copy_message(chat_id=m.chat.id, from_chat_id=m.chat.id, message_id=m.message_id)
         await m.answer("Запустить отправку?", parse_mode="HTML", reply_markup=kb)
@@ -1612,6 +1763,86 @@ async def admin_send_ad(c: CallbackQuery, state: FSMContext):
         await c.message.answer(f"🚀 Рассылка для <b>{len(users)}</b> пользователей запущена!", parse_mode="HTML")
         asyncio.create_task(run_broadcast(bot, ADMIN_ID, chat_id, msg_id, users))
     except Exception as e:
+        await c.message.answer(f"❌ Ошибка: {e}")
+
+
+@router.callback_query(AdminStates.confirm_ad, F.data == "admin_cities", F.from_user.id == ADMIN_ID)
+async def admin_pick_cities(c: CallbackQuery, state: FSMContext):
+    try:
+        audience = await asyncio.to_thread(db_get_city_audience)
+        if audience is None:
+            await c.answer("❌ Не удалось загрузить города из БД", show_alert=True)
+            return
+        opts = build_city_options(audience)
+        if not opts:
+            await c.answer("Нет ни одного города с пользователями", show_alert=True)
+            return
+        await state.update_data(city_opts=opts, city_sel=[])
+        await c.message.edit_text(
+            "🎯 <b>Выбери города для рассылки</b>\n\n"
+            "В скобках — сколько активных людей в городе, 📺 — есть канал-сателлит.",
+            parse_mode="HTML", reply_markup=kb_admin_cities(opts, set())
+        )
+        await c.answer()
+    except Exception as e:
+        logger.warning(f"admin_pick_cities error: {e}")
+
+
+@router.callback_query(AdminStates.confirm_ad, F.data.startswith("adm_ct_"), F.from_user.id == ADMIN_ID)
+async def admin_toggle_city(c: CallbackQuery, state: FSMContext):
+    try:
+        idx = int(c.data.split("_")[-1])
+        data = await state.get_data()
+        opts = data.get("city_opts") or []
+        sel = set(data.get("city_sel") or [])
+        if not (0 <= idx < len(opts)):
+            await c.answer()
+            return
+        sel.symmetric_difference_update({idx})
+        await state.update_data(city_sel=sorted(sel))
+        await c.message.edit_reply_markup(reply_markup=kb_admin_cities(opts, sel))
+        await c.answer()
+    except Exception as e:
+        logger.warning(f"admin_toggle_city error: {e}")
+
+
+@router.callback_query(AdminStates.confirm_ad, F.data == "admin_back", F.from_user.id == ADMIN_ID)
+async def admin_back(c: CallbackQuery):
+    try:
+        await c.message.edit_text("Запустить отправку?", reply_markup=kb_admin_confirm())
+        await c.answer()
+    except Exception as e:
+        logger.warning(f"admin_back error: {e}")
+
+
+@router.callback_query(AdminStates.confirm_ad, F.data == "admin_send_cities", F.from_user.id == ADMIN_ID)
+async def admin_send_to_cities(c: CallbackQuery, state: FSMContext):
+    try:
+        data = await state.get_data()
+        opts = data.get("city_opts") or []
+        sel = set(data.get("city_sel") or [])
+        if not sel:
+            await c.answer("Выбери хотя бы один город", show_alert=True)
+            return
+        users, channels, labels = admin_city_targets(opts, sel)
+        if not users and not channels:
+            await c.answer("В выбранных городах некому отправлять", show_alert=True)
+            return
+
+        msg_id, chat_id = data.get("ad_msg_id"), data.get("ad_chat_id")
+        await state.clear()
+        await c.message.edit_text(
+            f"🚀 Рассылка запущена!\n\n🎯 Города: {html.escape(', '.join(labels))}\n"
+            f"👥 Людей: <b>{len(users)}</b>\n📺 Каналов: <b>{len(channels)}</b>",
+            parse_mode="HTML"
+        )
+        await c.answer()
+        asyncio.create_task(run_broadcast(
+            bot, ADMIN_ID, chat_id, msg_id, users,
+            channels=channels, audience_note=", ".join(labels)
+        ))
+    except Exception as e:
+        logger.warning(f"admin_send_to_cities error: {e}")
         await c.message.answer(f"❌ Ошибка: {e}")
 
 
