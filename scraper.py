@@ -8,7 +8,7 @@ import argparse
 import random
 import time
 import unicodedata
-import urllib.parse
+import urllib.parse  # Добавлен импорт для экранирования URL
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -19,13 +19,17 @@ load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-CF_WORKER_URL = os.getenv("CF_WORKER_URL")
+CF_WORKER_URL = os.getenv("CF_WORKER_URL")  # Читаем адрес Cloudflare воркера
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Семафоры для контроля параллельности запросов
+LENTO_SEMAPHORE = asyncio.Semaphore(1)  # Lento строго в 1 поток, чтобы не провоцировать WAF Rate Limit
+
+# Города твоих Telegram-каналов (парсер будет шерстить их ВСЕГДА!)
 CHANNEL_CITIES = [
     "Lublin", "Białystok", "Radom", "Częstochowa", "Gdynia",
     "Poznań", "Rzeszów", "Bydgoszcz"
@@ -151,23 +155,27 @@ def fetch_url(url: str, impersonate_target: str = "chrome120", referer: str = No
 TARGET_BROWSERS = ["chrome120", "chrome110", "edge101", "safari184"]
 
 def fetch_url_with_retry(url: str, referer: str = None):
+    # 1. Пробуем получить страницу стандартным бронебойным путем (через curl_cffi)
     for browser in TARGET_BROWSERS:
         status, html = fetch_url(url, browser, referer)
         if status == 200 and html:
             return status, html
         if status == 403:
-            logger.warning(f"Got 403 with {browser} for {url}. Retrying with next profile...")
+            logger.debug(f"Got 403 with {browser} for {url}. Retrying with next profile...")
             time.sleep(1.0)
             continue
+        # Если статус не 403 и не 200 (например, 500 или 404), выходим
         if status != 0:
             return status, html
             
+    # 2. АВАРИЙНЫЙ РЕЖИМ (ПЛАН Б): Если все браузеры поймали 403 (блокировка IP), задействуем Cloudflare Worker
     if CF_WORKER_URL:
         try:
             logger.warning(f"🚨 АВАРИЙНЫЙ РЕЖИМ: IP заблокирован. Пробуем пробить через Cloudflare Worker для {url}")
             encoded_url = urllib.parse.quote(url, safe='')
             worker_target_url = f"{CF_WORKER_URL}?url={encoded_url}"
             
+            # Делаем запрос к нашему прокси-воркеру
             status, html = fetch_url(worker_target_url, "chrome120")
             if status == 200 and html:
                 logger.info(f"✅ Cloudflare Worker успешно пробил блокировку для {url}!")
@@ -206,6 +214,9 @@ def get_all_existing_ids() -> set:
 
 
 def get_rocketjobs_ids_all() -> set:
+    """ID всех вакансий RocketJobs в базе без ограничения по возрасту.
+    Нужно для моста между схемами ID: вакансия, сохранённая старым парсером, не должна
+    сохраняться повторно только потому, что её created_at старше окна get_all_existing_ids."""
     ids = set()
     try:
         page_size, offset = 1000, 0
@@ -245,15 +256,21 @@ async def db_insert_jobs_batch(jobs_list: list) -> int:
 
 
 def get_active_cities_from_db() -> list:
+    """
+    Выбирает города активных юзеров, и ГАРАНТИРОВАННО добавляет города твоих каналов,
+    чтобы они наполнялись контентом 24/7!
+    """
     try:
         r = supabase.table("user_filters").select("city").eq("is_paused", False).execute()
         cities = {row["city"] for row in r.data if row.get("city")}
         
+        # Если кто-то ищет во всей Польше, берем полный базовый список городов
         if "all" in cities:
             final_cities = set(MAIN_SCAN_CITIES)
         else:
             final_cities = cities
             
+        # Гарантированно добавляем города каналов в скан-лист, даже если сработал режим "all"
         for c in CHANNEL_CITIES:
             final_cities.add(c)
             
@@ -423,9 +440,9 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
         return 0
 
 
-# ==================== ROCKETJOBS (ОЧИЩЕННАЯ ДЕДУПЛИКАЦИЯ) ====================
-
 def rj_norm(text) -> str:
+    """Нормализация для ключа дедупликации: без диакритики, регистра, пунктуации и лишних пробелов.
+    ł/Ł не раскладываются через NFKD — заменяем вручную. \\w оставляет любые буквы/цифры (в т.ч. кириллицу)."""
     text = strip_html(text or "")
     text = text.replace("\u0141", "L").replace("\u0142", "l")
     text = unicodedata.normalize("NFKD", text)
@@ -435,6 +452,7 @@ def rj_norm(text) -> str:
 
 
 def rj_company(card) -> str:
+    """Название компании: <p> рядом с иконкой svg.lucide-building (не building-2!)."""
     icon = card.select_one("svg.lucide-building")
     node = icon.parent if icon else None
     for _ in range(3):
@@ -448,38 +466,47 @@ def rj_company(card) -> str:
 
 
 def rj_slug(link: str) -> str:
+    """Слаг из пути ссылки без домена, query, хэша и хвостового слэша."""
     path = urllib.parse.urlparse(link).path
     return path.rstrip("/").rsplit("/", 1)[-1].lower()
 
 
 def rj_offer_id(link: str) -> str:
+    """Настоящий ID оффера — 8 hex-символов в конце слага (…-sales-it-i-telekomunikacja-e6d8bdb2).
+    Есть не у всех офферов: у части слаг заканчивается просто категорией. Требуем хотя бы одну
+    цифру, чтобы не принять за ID случайное слово из букв a-f."""
     m = re.search(r"-([0-9a-f]{8})$", rj_slug(link))
     if m and any(ch.isdigit() for ch in m.group(1)):
         return m.group(1)
     return ""
 
 
-def rj_ids(link: str, card, title: str):
-    """
-    Чистая дедупликация: ext_id строго без города в хэше,
-    чтобы одна вакансия не плодила дубликаты по городам и категориям.
-    """
+def rj_ids(link: str, card, title: str, job_city: str):
+    """Возвращает (ext_id, bridge_ids).
+    ext_id — актуальный ключ, стабильный между прогонами:
+      * есть ID в слаге -> md5("rocketjobs_<id>_<город>"); город нужен, потому что один оффер
+        на несколько локаций должен жить отдельной строкой в каждом городе (у каждого свой канал);
+      * ID нет -> md5 от компании + названия + города (без URL).
+    bridge_ids — ID, которые прошлые версии парсера писали в БД для этой же вакансии.
+    Если любой из них уже есть в базе — вакансию считаем сохранённой (иначе миграция схемы
+    заново зальёт всё, что сейчас висит на сайте)."""
+    city_n = rj_norm(job_city)
+    title_n = rj_norm(title)
+    company_n = rj_norm(rj_company(card))
+    content_key = f"{company_n or rj_slug(link)}|{title_n}|{city_n}"
+
     offer_id = rj_offer_id(link)
     if offer_id:
-        ext_id = hashlib.md5(f"rocketjobs_{offer_id}".encode("utf-8")).hexdigest()
+        ext_id = hashlib.md5(f"rocketjobs_{offer_id}_{city_n}".encode("utf-8")).hexdigest()
     else:
-        title_n = rj_norm(title)
-        company_n = rj_norm(rj_company(card))
-        slug_n = rj_slug(link)
-        content_key = f"{company_n or slug_n}|{title_n}"
         ext_id = hashlib.md5(f"rocketjobs_{content_key}".encode("utf-8")).hexdigest()
 
-    # Сохраняем мост только со старыми хэшами по полной ссылке
-    legacy_url_hash = hashlib.md5(f"rocketjobs_{link}".encode("utf-8")).hexdigest()
-    bridge_ids = {legacy_url_hash}
-    bridge_ids.discard(ext_id)
-
-    return ext_id, bridge_ids
+    bridge = {
+        hashlib.md5(f"rocketjobs_{link}".encode()).hexdigest(),                 # v1: по полной чистой ссылке
+        hashlib.md5(f"rocketjobs2|{content_key}".encode("utf-8")).hexdigest(),  # v2: прошлая правка
+    }
+    bridge.discard(ext_id)
+    return ext_id, bridge
 
 
 async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
@@ -506,6 +533,8 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                 continue
 
             soup = BeautifulSoup(html, "html.parser")
+            
+            # Находим карточки по стабильному семантическому классу a.offer-card
             offer_links = soup.select("a.offer-card")
             total_found += len(offer_links)
 
@@ -516,6 +545,7 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                         card = a.find_parent(["li", "article", "div"]) or a
 
                     title = a.get("title", "").replace("Zobacz ofertę", "").strip()
+
                     title_el = card.select_one("a.offer_list_offer_title_link") or card.select_one("h3 a") or card.find("h3")
                     if title_el:
                         inner_title = strip_html(title_el.get_text(strip=True))
@@ -544,9 +574,7 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                         while container is not None and hops < 5:
                             loc_text = strip_html(container.get_text(" ", strip=True))
                             if loc_text:
-                                extracted_city = loc_text.split(",")[0].split()[0].replace(",", "").strip()
-                                if extracted_city:
-                                    job_city = extracted_city
+                                job_city = loc_text.split(",")[0].split()[0].replace(",", "").strip() or city
                                 break
                             container = container.parent
                             hops += 1
@@ -554,7 +582,7 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                     if not city_matches(job_city, city):
                         continue
 
-                    ext_id, bridge_ids = rj_ids(link, card, title)
+                    ext_id, bridge_ids = rj_ids(link, card, title, job_city)
 
                     if ext_id in seen_this_run:
                         dupes_in_run += 1
@@ -600,16 +628,20 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
 
 # ==================== LENTO.PL ====================
 
-LENTO_SUBDOMAIN_OVERRIDES = {}
+LENTO_SUBDOMAIN_OVERRIDES = {
+    # "zielona-gora": "zielonagora",
+}
 
 
 def is_lento_promo(card) -> bool:
+    """Промо-объявление: класс tablelist-tr-promo или плашка 'Promowane'."""
     if "tablelist-tr-promo" in (card.get("class") or []):
         return True
     return card.select_one(".promo-label") is not None
 
 
 def extract_lento_card(card):
+    """Разбирает одну карточку Lento. Возвращает dict с полями или None, если карточка битая."""
     title_el = card.select_one("a.title-list-item")
     if not title_el:
         return None
@@ -666,67 +698,72 @@ async def parse_lento(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
         subdomain = LENTO_SUBDOMAIN_OVERRIDES.get(slug, slug)
         url = f"https://{subdomain}.lento.pl/praca/dam-prace.html"
 
-        status, html = await asyncio.to_thread(fetch_url_with_retry, url, "https://www.google.com/")
-        if status != 200 or not html:
-            logger.warning(f"Lento returned status {status} for {city} ({url})")
-            return 0
+        # ВЫПОЛНЯЕМ СТРОГО В 1 ПОТОК С ПАУЗОЙ ДЛЯ ЗАЩИТЫ ОТ 403 RATE LIMIT
+        async with LENTO_SEMAPHORE:
+            delay = random.uniform(1.5, 2.5)
+            await asyncio.sleep(delay)
 
-        soup = BeautifulSoup(html, "html.parser")
-        cards = soup.select("div.tablelist-tr")
-        if not cards:
-            logger.warning(f"⚠️ Lento: 0 cards found for {city}. Page title: {soup.title.string if soup.title else 'N/A'}")
-            return 0
+            status, html = await asyncio.to_thread(fetch_url_with_retry, url, "https://www.google.com/")
+            if status != 200 or not html:
+                logger.warning(f"Lento returned status {status} for {city} ({url})")
+                return 0
 
-        jobs_to_save = []
-        ignored_promo = 0
-        ignored_duplicate = 0
-        ignored_city = 0
-        parse_errors = 0
+            soup = BeautifulSoup(html, "html.parser")
+            cards = soup.select("div.tablelist-tr")
+            if not cards:
+                logger.warning(f"⚠️ Lento: 0 cards found for {city}. Page title: {soup.title.string if soup.title else 'N/A'}")
+                return 0
 
-        for card in cards:
-            try:
-                if is_lento_promo(card):
-                    ignored_promo += 1
-                    continue
+            jobs_to_save = []
+            ignored_promo = 0
+            ignored_duplicate = 0
+            ignored_city = 0
+            parse_errors = 0
 
-                data = extract_lento_card(card)
-                if not data:
-                    parse_errors += 1
-                    continue
-
-                job_city = data["city"] or city
-                if not city_matches(job_city, city):
-                    ignored_city += 1
-                    continue
-
-                ext_id = hashlib.md5(f"lento_{data['ad_id'] or data['link']}".encode()).hexdigest()
-
-                async with lock:
-                    if ext_id in existing_ids:
-                        ignored_duplicate += 1
+            for card in cards:
+                try:
+                    if is_lento_promo(card):
+                        ignored_promo += 1
                         continue
-                    existing_ids.add(ext_id)
 
-                jobs_to_save.append({
-                    "external_id": ext_id,
-                    "title": data["title"],
-                    "city": job_city,
-                    "salary": data["salary"],
-                    "url": data["link"],
-                    "source": "Lento",
-                    "umowa": data["umowa"],
-                    "etat": data["etat"],
-                })
-            except Exception as e:
-                parse_errors += 1
-                logger.debug(f"Lento card error: {e}")
+                    data = extract_lento_card(card)
+                    if not data:
+                        parse_errors += 1
+                        continue
 
-        saved = await db_insert_jobs_batch(jobs_to_save)
-        logger.info(
-            f"Lento saved={saved} (cards={len(cards)}, promo={ignored_promo}, duplicates={ignored_duplicate}, "
-            f"city_mismatch={ignored_city}, errors={parse_errors}) city={city}"
-        )
-        return saved
+                    job_city = data["city"] or city
+                    if not city_matches(job_city, city):
+                        ignored_city += 1
+                        continue
+
+                    ext_id = hashlib.md5(f"lento_{data['ad_id'] or data['link']}".encode()).hexdigest()
+
+                    async with lock:
+                        if ext_id in existing_ids:
+                            ignored_duplicate += 1
+                            continue
+                        existing_ids.add(ext_id)
+
+                    jobs_to_save.append({
+                        "external_id": ext_id,
+                        "title": data["title"],
+                        "city": job_city,
+                        "salary": data["salary"],
+                        "url": data["link"],
+                        "source": "Lento",
+                        "umowa": data["umowa"],
+                        "etat": data["etat"],
+                    })
+                except Exception as e:
+                    parse_errors += 1
+                    logger.debug(f"Lento card error: {e}")
+
+            saved = await db_insert_jobs_batch(jobs_to_save)
+            logger.info(
+                f"Lento saved={saved} (cards={len(cards)}, promo={ignored_promo}, duplicates={ignored_duplicate}, "
+                f"city_mismatch={ignored_city}, errors={parse_errors}) city={city}"
+            )
+            return saved
     except Exception as e:
         logger.error(f"parse_lento({city}) error: {e}")
         return 0
@@ -734,7 +771,10 @@ async def parse_lento(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
 
 # ==================== FACHPRACA.PL ====================
 
-FACHPRACA_CITY_OVERRIDES = {}
+FACHPRACA_CITY_OVERRIDES = {
+    # "Zielona Góra": "zielona-góra",
+}
+
 ENABLE_FACHPRACA = False
 
 
@@ -744,11 +784,13 @@ def build_fachpraca_url(city: str) -> str:
 
 
 def is_fachpraca_promo(card) -> bool:
+    """Выделенные/промо-объявления: любой класс-модификатор кроме базового job-list__offer."""
     classes = [c for c in (card.get("class") or []) if c != "job-list__offer"]
     return any(x in " ".join(classes).lower() for x in ["promo", "wyroznion", "wyróżnion", "featured", "highlight", "top"])
 
 
 def extract_fachpraca_card(card):
+    """Разбирает одну карточку Fachpraca (li.job-list__offer). Возвращает dict или None."""
     title_el = card.select_one("a.job-list__job-name")
     if not title_el:
         return None
