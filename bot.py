@@ -1141,7 +1141,7 @@ async def start_web_server():
 # ==================== FORMAT & SEND ====================
 
 # Текст кнопки со ссылкой на вакансию (единый для всех сообщений)
-JOB_BUTTON_TEXT = "🔗 Перейти к объявлению"
+JOB_BUTTON_TEXT = "🔗 Przejdź do oferty"
 
 
 def is_valid_job_url(url) -> bool:
