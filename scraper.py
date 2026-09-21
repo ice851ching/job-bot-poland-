@@ -7,6 +7,7 @@ import re
 import argparse
 import random
 import time
+import unicodedata
 import urllib.parse  # Добавлен импорт для экранирования URL
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
@@ -414,6 +415,37 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
         return 0
 
 
+def rj_norm(text) -> str:
+    """Нормализация для ключа дедупликации: без диакритики, регистра, пунктуации и лишних пробелов.
+    ł/Ł не раскладываются через NFKD — заменяем вручную. \\w оставляет любые буквы/цифры (в т.ч. кириллицу)."""
+    text = strip_html(text or "")
+    text = text.replace("\u0141", "L").replace("\u0142", "l")
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r"[\W_]+", " ", text.casefold())
+    return text.strip()
+
+
+def rj_company(card) -> str:
+    """Название компании: <p> рядом с иконкой svg.lucide-building (не building-2!)."""
+    icon = card.select_one("svg.lucide-building")
+    node = icon.parent if icon else None
+    for _ in range(3):
+        if node is None:
+            break
+        p = node.find_next_sibling("p")
+        if p and p.get_text(strip=True):
+            return p.get_text(strip=True)
+        node = node.parent
+    return ""
+
+
+def rj_slug(link: str) -> str:
+    """Слаг из пути ссылки без домена, query, хэша и хвостового слэша."""
+    path = urllib.parse.urlparse(link).path
+    return path.rstrip("/").rsplit("/", 1)[-1].lower()
+
+
 async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
     try:
         slug = get_city_slug(city)
@@ -424,7 +456,9 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
         jobs_to_save = []
         total_found = 0
         already_in_db = 0
+        dupes_in_run = 0
         parse_errors = 0
+        seen_this_run = set()
 
         for category in categories:
             await asyncio.sleep(random.uniform(1.5, 3.5))
@@ -481,14 +515,6 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                         link = "https://rocketjobs.pl" + link
                     link = link.split("?")[0].split("#")[0]
 
-                    ext_id = hashlib.md5(f"rocketjobs_{link}".encode()).hexdigest()
-                    
-                    async with lock:
-                        if ext_id in existing_ids:
-                            already_in_db += 1
-                            continue
-                        existing_ids.add(ext_id)
-
                     # 3. Извлекаем город через иконку svg.lucide-map-pin
                     # Сама иконка обёрнута в свой собственный <div class="MuiBox-root ...">,
                     # у которого кроме иконки ничего нет — он тоже подпадает под класс
@@ -511,6 +537,26 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
 
                     if not city_matches(job_city, city):
                         continue
+
+                    # ID = компания + название + город карточки. URL в ключе НЕ участвует:
+                    # слаг у RocketJobs = компания + название + город + категория оффера
+                    # (см. href карточки), т.е. меняется при смене города/категории, а поля — нет.
+                    # Если компанию достать не удалось — берём слаг из URL как запасной "идентификатор".
+                    identity = rj_norm(rj_company(card)) or rj_slug(link)
+                    ext_id = hashlib.md5(
+                        f"rocketjobs2|{identity}|{rj_norm(title)}|{rj_norm(job_city)}".encode("utf-8")
+                    ).hexdigest()
+
+                    if ext_id in seen_this_run:
+                        dupes_in_run += 1
+                        continue
+                    seen_this_run.add(ext_id)
+
+                    async with lock:
+                        if ext_id in existing_ids:
+                            already_in_db += 1
+                            continue
+                        existing_ids.add(ext_id)
 
                     # 4. Извлекаем зарплату через Regex
                     card_full_text = card.get_text(" ", strip=True)
@@ -536,7 +582,7 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
 
         saved = await db_insert_jobs_batch(jobs_to_save)
         logger.info(
-            f"RocketJobs saved={saved} (found={total_found}, in_db={already_in_db}, errors={parse_errors}) city={city}"
+            f"RocketJobs saved={saved} (found={total_found}, in_db={already_in_db}, dupes_in_run={dupes_in_run}, errors={parse_errors}) city={city}"
         )
         return saved
     except Exception as e:
