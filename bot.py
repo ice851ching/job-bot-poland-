@@ -64,6 +64,7 @@ DONATE_ACCOUNT = "84 9511 0000 0052 9681 3000 0010"
 
 # ==================== VIP ====================
 VIP_PRICE_STARS = 100          # цена в Telegram Stars
+VIP_PRICE_PLN = 8              # ориентировочная цена в злотых (для отображения рядом со звёздами)
 VIP_DURATION_DAYS = 60         # срок VIP за одну покупку
 VIP_PAYLOAD = "vip_60d"        # идентификатор товара в инвойсе
 
@@ -79,11 +80,7 @@ BLOCKED_KEYWORDS = [
     "kierowca uber", "kierowca bolt", "kierowca glovo",
 ]
 
-BTN_RESET = "🔄 Ustaw od nowa"
-BTN_STOP = "⏹ Zatrzymaj"
-BTN_HELP = "ℹ️ Pomoc/VIP"
-BTN_RESTART = "🚀 Uruchom ponownie"
-BTN_CV = "#⃣ Stwórz CV"
+# Подписи кнопок нижнего меню локализованы через TEXTS (ключи btn_reset/btn_stop/btn_help/btn_restart/btn_cv)
 
 # Шаблоны резюме, доступные только VIP-пользователям (совпадает с data-tpl в index.html)
 VIP_ONLY_CV_TEMPLATES = {"t4", "t5", "t6"}
@@ -208,9 +205,9 @@ TEXTS = {
             "Агрегирует публично доступные вакансии "
             "с OLX, Praca.pl и RocketJobs и присылает их тебе.\n\n"
             "<b>Управление:</b>\n"
-            f"<b>{BTN_RESET}</b> — настроить фильтры заново\n"
-            f"<b>{BTN_STOP}</b> — остановить рассылку\n"
-            f"<b>{BTN_HELP}</b> — эта справка\n"
+            "<b>🔄 Сбросить фильтры</b> — настроить фильтры заново\n"
+            "<b>⏹ Остановить</b> — остановить рассылку\n"
+            "<b>ℹ️ Помощь/VIP</b> — эта справка\n"
             "<b>/vip</b> — ⭐ VIP-версия: 5 сайтов вместо 3, поиск без остановок и стильные шаблоны резюме\n"
             "<b>#⃣ Создать резюме</b> — конструктор резюме с моментальным получением PDF в чат (лимит: 3 резюме в день)\n\n"
             "По вопросам и сотрудничеству: @Hriaker1"
@@ -236,7 +233,7 @@ TEXTS = {
             "С <b>VIP</b> бот ищет на <b>5 сайтах вместо 3</b> — добавляются "
             "<b>Lento.pl</b> и <b>Infopraca.pl</b>, а поиск работает "
             "<b>без остановок каждые 3 дня</b>. А ещё — <b>стильные VIP-шаблоны резюме</b>.\n\n"
-            "💰 <b>{price} ⭐ = {days} дней VIP</b>\n\n"
+            "💰 <b>{price} ⭐ (≈{price_pln} zł) = {days} дней VIP</b>\n\n"
             "👇 Подробнее — кнопка ниже или команда /vip"
         ),
         "vip_info": (
@@ -253,12 +250,12 @@ TEXTS = {
             "<b>Сравнение:</b>\n"
             "🆓 Бесплатно: OLX, Praca.pl, RocketJobs + подтверждение каждые 3 дня + базовые шаблоны резюме\n"
             "⭐ VIP: OLX, Praca.pl, RocketJobs + Lento.pl + Infopraca.pl, без остановок + стильные шаблоны резюме\n\n"
-            "💰 <b>Цена: {price} ⭐ Telegram Stars за {days} дней VIP.</b>\n"
+            "💰 <b>Цена: {price} ⭐ (≈{price_pln} zł) Telegram Stars за {days} дней VIP.</b>\n"
             "Разовый платёж, автопродления нет."
         ),
         "vip_active_line": "✅ <b>VIP активен до {until}.</b>\nЕсли продлишь сейчас, новые {days} дней добавятся к текущему сроку.\n\n",
-        "btn_buy_vip": "⭐ Купить VIP — {price} ⭐ / {days} дней",
-        "btn_extend_vip": "⭐ Продлить на {days} дней — {price} ⭐",
+        "btn_buy_vip": "⭐ Купить VIP — {price} ⭐ (≈{price_pln} zł) / {days} дней",
+        "btn_extend_vip": "⭐ Продлить на {days} дней — {price} ⭐ (≈{price_pln} zł)",
         "btn_vip_details": "ℹ️ Подробнее про VIP",
         "vip_invoice_title": "VIP на {days} дней",
         "vip_invoice_desc": "5 сайтов вместо 3 (+ Lento.pl и Infopraca.pl) и поиск без остановок каждые 3 дня + стильные шаблоны резюме. Срок действия — {days} дней.",
@@ -272,6 +269,10 @@ TEXTS = {
         "vip_pay_error": "⚠️ Оплата прошла, но при активации VIP возникла ошибка. Напиши @Hriaker1 — всё быстро исправим.",
         "paysupport": "💬 По вопросам оплаты пиши: @Hriaker1\nУкажи свой Telegram ID и время платежа.",
         "btn_cv": "#⃣ Создать резюме",
+        "btn_reset": "🔄 Сбросить фильтры",
+        "btn_stop": "⏹ Остановить",
+        "btn_help": "ℹ️ Помощь/VIP",
+        "btn_restart": "🚀 Запустить заново",
     },
     "pl": {
         "welcome": (
@@ -302,9 +303,9 @@ TEXTS = {
         "help": (
             "🤖 <b>Co robi bot:</b>\n\n"
             "Agreguje oferty pracy z OLX, Praca.pl i RocketJobs.\n\n"
-            f"<b>{BTN_RESET}</b> — ustaw filtry od nowa\n"
-            f"<b>{BTN_STOP}</b> — zatrzymaj wysyłkę\n"
-            f"<b>{BTN_HELP}</b> — ta pomoc\n"
+            "<b>🔄 Ustaw od nowa</b> — ustaw filtry od nowa\n"
+            "<b>⏹ Zatrzymaj</b> — zatrzymaj wysyłkę\n"
+            "<b>ℹ️ Pomoc/VIP</b> — ta pomoc\n"
             "<b>/vip</b> — ⭐ wersja VIP: 5 serwisów zamiast 3, wyszukiwanie bez przerw i stylowe szablony CV\n"
             "<b>#⃣ Stwórz CV</b> — kreator CV z bezpośrednim przesłaniem PDF (limit: 3 na dobę)\n\n"
             "Pytania i współpraca: @Hriaker1"
@@ -329,7 +330,7 @@ TEXTS = {
             "Z <b>VIP</b> bot szuka na <b>5 serwisach zamiast 3</b> — dochodzą "
             "<b>Lento.pl</b> i <b>Infopraca.pl</b>, a wyszukiwanie działa "
             "<b>bez przerw co 3 dni</b>. Do tego — <b>stylowe szablony CV VIP</b>.\n\n"
-            "💰 <b>{price} ⭐ = {days} dni VIP</b>\n\n"
+            "💰 <b>{price} ⭐ (≈{price_pln} zł) = {days} dni VIP</b>\n\n"
             "👇 Szczegóły — przycisk poniżej lub komenda /vip"
         ),
         "vip_info": (
@@ -346,12 +347,12 @@ TEXTS = {
             "<b>Porównanie:</b>\n"
             "🆓 Darmowa: OLX, Praca.pl, RocketJobs + potwierdzenie co 3 dni + podstawowe szablony CV\n"
             "⭐ VIP: OLX, Praca.pl, RocketJobs + Lento.pl + Infopraca.pl, bez przerw + stylowe szablony CV\n\n"
-            "💰 <b>Cena: {price} ⭐ Telegram Stars za {days} dni VIP.</b>\n"
+            "💰 <b>Cena: {price} ⭐ (≈{price_pln} zł) Telegram Stars za {days} dni VIP.</b>\n"
             "Płatność jednorazowa, bez automatycznego odnawiania."
         ),
         "vip_active_line": "✅ <b>VIP aktywny do {until}.</b>\nJeśli przedłużysz teraz, kolejne {days} dni zostanie dodane do obecnego terminu.\n\n",
-        "btn_buy_vip": "⭐ Kup VIP — {price} ⭐ / {days} dni",
-        "btn_extend_vip": "⭐ Przedłuż o {days} dni — {price} ⭐",
+        "btn_buy_vip": "⭐ Kup VIP — {price} ⭐ (≈{price_pln} zł) / {days} dni",
+        "btn_extend_vip": "⭐ Przedłuż o {days} dni — {price} ⭐ (≈{price_pln} zł)",
         "btn_vip_details": "ℹ️ Więcej o VIP",
         "vip_invoice_title": "VIP na {days} dni",
         "vip_invoice_desc": "5 serwisów zamiast 3 (+ Lento.pl i Infopraca.pl) i wyszukiwanie bez przerw co 3 dni + stylowe szablony CV. Okres ważności — {days} dni.",
@@ -365,6 +366,10 @@ TEXTS = {
         "vip_pay_error": "⚠️ Płatność przeszła, ale wystąpił błąd przy aktywacji VIP. Napisz do @Hriaker1 — szybko to naprawimy.",
         "paysupport": "💬 W sprawie płatności pisz: @Hriaker1\nPodaj swoje Telegram ID i czas płatności.",
         "btn_cv": "#⃣ Stwórz CV",
+        "btn_reset": "🔄 Ustaw od nowa",
+        "btn_stop": "⏹ Zatrzymaj",
+        "btn_help": "ℹ️ Pomoc/VIP",
+        "btn_restart": "🚀 Uruchom ponownie",
     },
     "ua": {
         "welcome": (
@@ -395,9 +400,9 @@ TEXTS = {
         "help": (
             "🤖 <b>Що вміє бот:</b>\n\n"
             "Агрегує публічні вакансії з OLX, Praca.pl та RocketJobs.\n\n"
-            f"<b>{BTN_RESET}</b> — налаштувати фільтри заново\n"
-            f"<b>{BTN_STOP}</b> — зупинити розсилку\n"
-            f"<b>{BTN_HELP}</b> — ця довідка\n"
+            "<b>🔄 Скинути фільтри</b> — налаштувати фільтри заново\n"
+            "<b>⏹ Зупинити</b> — зупинити розсилку\n"
+            "<b>ℹ️ Допомога/VIP</b> — ця довідка\n"
             "<b>/vip</b> — ⭐ VIP-версія: 5 сайтів замість 3, пошук без зупинок і стильні шаблони резюме\n"
             "<b>#⃣ Створити резюме</b> — конструктор резюме з миттєвим отриманням PDF в чаті (ліміт: 3 на день)\n\n"
             "Питання та співпраця: @Hriaker1"
@@ -422,7 +427,7 @@ TEXTS = {
             "З <b>VIP</b> бот шукає на <b>5 сайтах замість 3</b> — додаються "
             "<b>Lento.pl</b> та <b>Infopraca.pl</b>, а пошук працює "
             "<b>без зупинок кожні 3 дні</b>. А ще — <b>стильні VIP-шаблони резюме</b>.\n\n"
-            "💰 <b>{price} ⭐ = {days} днів VIP</b>\n\n"
+            "💰 <b>{price} ⭐ (≈{price_pln} zł) = {days} днів VIP</b>\n\n"
             "👇 Докладніше — кнопка нижче або команда /vip"
         ),
         "vip_info": (
@@ -439,12 +444,12 @@ TEXTS = {
             "<b>Порівняння:</b>\n"
             "🆓 Безкоштовно: OLX, Praca.pl, RocketJobs + підтвердження кожні 3 дні + базові шаблони резюме\n"
             "⭐ VIP: OLX, Praca.pl, RocketJobs + Lento.pl + Infopraca.pl, без зупинок + стильні шаблони резюме\n\n"
-            "💰 <b>Ціна: {price} ⭐ Telegram Stars за {days} днів VIP.</b>\n"
+            "💰 <b>Ціна: {price} ⭐ (≈{price_pln} zł) Telegram Stars за {days} днів VIP.</b>\n"
             "Разовий платіж, без автопродовження."
         ),
         "vip_active_line": "✅ <b>VIP активний до {until}.</b>\nЯкщо продовжиш зараз, нові {days} днів додадуться до поточного терміну.\n\n",
-        "btn_buy_vip": "⭐ Купити VIP — {price} ⭐ / {days} днів",
-        "btn_extend_vip": "⭐ Продовжити на {days} днів — {price} ⭐",
+        "btn_buy_vip": "⭐ Купити VIP — {price} ⭐ (≈{price_pln} zł) / {days} днів",
+        "btn_extend_vip": "⭐ Продовжити на {days} днів — {price} ⭐ (≈{price_pln} zł)",
         "btn_vip_details": "ℹ️ Докладніше про VIP",
         "vip_invoice_title": "VIP на {days} днів",
         "vip_invoice_desc": "5 сайтів замість 3 (+ Lento.pl та Infopraca.pl) і пошук без зупинок кожні 3 дні + стильні шаблони резюме. Термін дії — {days} днів.",
@@ -458,8 +463,19 @@ TEXTS = {
         "vip_pay_error": "⚠️ Оплата пройшла, але під час активації VIP сталася помилка. Напиши @Hriaker1 — швидко все виправимо.",
         "paysupport": "💬 З питань оплати пиши: @Hriaker1\nВкажи свій Telegram ID і час платежу.",
         "btn_cv": "#⃣ Створити резюме",
+        "btn_reset": "🔄 Скинути фільтри",
+        "btn_stop": "⏹ Зупинити",
+        "btn_help": "ℹ️ Допомога/VIP",
+        "btn_restart": "🚀 Запустити знову",
     },
 }
+
+
+ALL_BTN_RESET = {TEXTS[l]["btn_reset"] for l in TEXTS}
+ALL_BTN_STOP = {TEXTS[l]["btn_stop"] for l in TEXTS}
+ALL_BTN_HELP = {TEXTS[l]["btn_help"] for l in TEXTS}
+ALL_BTN_RESTART = {TEXTS[l]["btn_restart"] for l in TEXTS}
+ALL_MENU_BTNS = ALL_BTN_RESET | ALL_BTN_STOP | ALL_BTN_HELP | ALL_BTN_RESTART
 
 
 def t(lang, key, **kwargs):
@@ -470,6 +486,7 @@ def t(lang, key, **kwargs):
 def vip_t(lang, key, **kwargs):
     """t() для VIP-текстов: сама подставляет цену и срок."""
     kwargs.setdefault("price", VIP_PRICE_STARS)
+    kwargs.setdefault("price_pln", VIP_PRICE_PLN)
     kwargs.setdefault("days", VIP_DURATION_DAYS)
     kwargs.setdefault("until", "")
     return t(lang, key, **kwargs)
@@ -1141,7 +1158,7 @@ async def start_web_server():
 # ==================== FORMAT & SEND ====================
 
 # Текст кнопки со ссылкой на вакансию (единый для всех сообщений)
-JOB_BUTTON_TEXT = "🔗 Przejdź do oferty"
+JOB_BUTTON_TEXT = "🔗 Перейти к объявлению"
 
 
 def is_valid_job_url(url) -> bool:
@@ -1485,15 +1502,15 @@ def kb_active_menu(lang="ru", tid=None):
     web_url = f"https://myworkcvapp.netlify.app/index.html?uid={tid}" if tid else "https://myworkcvapp.netlify.app/index.html"
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=BTN_RESET), KeyboardButton(text=BTN_STOP)],
-            [KeyboardButton(text=BTN_HELP), KeyboardButton(text=BTN_CV, web_app=WebAppInfo(url=web_url))],
+            [KeyboardButton(text=t(lang, "btn_reset")), KeyboardButton(text=t(lang, "btn_stop"))],
+            [KeyboardButton(text=t(lang, "btn_help")), KeyboardButton(text=t(lang, "btn_cv"), web_app=WebAppInfo(url=web_url))],
         ],
         resize_keyboard=True
     )
 
 
-def kb_stopped_menu():
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=BTN_RESTART)]], resize_keyboard=True)
+def kb_stopped_menu(lang="ru"):
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=t(lang, "btn_restart"))]], resize_keyboard=True)
 
 
 def kb_renew_search(lang):
@@ -2023,11 +2040,11 @@ async def cmd_stop(m: Message, state: FSMContext):
         lang = await asyncio.to_thread(get_user_lang, m.from_user.id)
         has_filter = await asyncio.to_thread(db_get_filter, m.from_user.id)
         if not has_filter:
-            await m.answer(t(lang, "already_stopped"), reply_markup=kb_stopped_menu())
+            await m.answer(t(lang, "already_stopped"), reply_markup=kb_stopped_menu(lang))
             return
         await asyncio.to_thread(db_delete_filter, m.from_user.id)
         await asyncio.to_thread(db_set_user_active, m.from_user.id, False)
-        await m.answer(t(lang, "stop_donate"), parse_mode="HTML", reply_markup=kb_stopped_menu())
+        await m.answer(t(lang, "stop_donate"), parse_mode="HTML", reply_markup=kb_stopped_menu(lang))
     except Exception as e:
         logger.warning(f"cmd_stop error: {e}")
 
@@ -2041,22 +2058,22 @@ async def cmd_help(m: Message):
         logger.warning(f"cmd_help error: {e}")
 
 
-@router.message(F.text == BTN_RESET)
+@router.message(F.text.in_(ALL_BTN_RESET))
 async def btn_reset(m: Message, state: FSMContext):
     await cmd_reset(m, state)
 
 
-@router.message(F.text == BTN_STOP)
+@router.message(F.text.in_(ALL_BTN_STOP))
 async def btn_stop(m: Message, state: FSMContext):
     await cmd_stop(m, state)
 
 
-@router.message(F.text == BTN_HELP)
+@router.message(F.text.in_(ALL_BTN_HELP))
 async def btn_help(m: Message):
     await cmd_help(m)
 
 
-@router.message(F.text == BTN_RESTART)
+@router.message(F.text.in_(ALL_BTN_RESTART))
 async def btn_restart(m: Message, state: FSMContext):
     await cmd_start(m, state)
 
@@ -2097,7 +2114,7 @@ async def on_city(c: CallbackQuery, state: FSMContext):
         logger.warning(f"on_city error: {e}")
 
 
-@router.message(SetupStates.city_custom, ~F.text.in_({BTN_RESET, BTN_STOP, BTN_HELP, BTN_RESTART}))
+@router.message(SetupStates.city_custom, ~F.text.in_(ALL_MENU_BTNS))
 async def on_city_custom(m: Message, state: FSMContext):
     try:
         data = await state.get_data()
