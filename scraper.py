@@ -20,6 +20,7 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 CF_WORKER_URL = os.getenv("CF_WORKER_URL")  # Читаем адрес Cloudflare воркера
+SCRAPERAPI_KEY = os.getenv("SCRAPERAPI_KEY")  # Ключ ScraperAPI (сайт-посредник для Gowork), хранить только в .env
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -1145,43 +1146,104 @@ async def parse_infopraca(city: str, existing_ids: set, lock: asyncio.Lock) -> i
 
 # ==================== GOWORK.PL (VIP, максимально бережный режим) ====================
 
-def extract_gowork_card(card):
-    """Разбирает одну карточку Gowork (div.g-job-item). Возвращает dict или None."""
-    title_el = card.select_one(".g-job-item__offer-title h3 a")
+GOWORK_BASE = "https://www.gowork.pl"
+GOWORK_RADIUS_KM = 5
+GOWORK_HOSTS = {"www.gowork.pl", "gowork.pl", "api.scraperapi.com"}
+
+GOWORK_ID_RE = re.compile(r"/oferta/[^,]+,([^,]+),")
+# Требуем цифру рядом с валютой, чтобы "zł" внутри слов вроде "złożyć" не ловилось
+GOWORK_SALARY_RE = re.compile(r"\d[\d\s.,–-]*\s*(?:zł|pln|eur|€)|(?:€|eur)\s*\d", re.I)
+# Теги, которые точно не являются городом
+GOWORK_NON_CITY_WORDS = (
+    "umowa", "etat", "b2b", "kontrakt", "zlecen", "dzieł", "dziel", "stacjonarn",
+    "zdaln", "hybrydow", "mobiln", "opublikowano", "podsumowanie", "aplikowa",
+    "3/4", "1/2", "1/4",
+)
+
+
+def _gowork_clean(text) -> str:
+    return re.sub(r"\s+", " ", str(text or "").replace("\xa0", " ")).strip()
+
+
+def _gowork_abs_url(href: str) -> str:
+    """Относительный href -> https://www.gowork.pl/...
+    Если ссылка пришла с хостом api.scraperapi.com (при рендере через прокси), подменяем на gowork.pl."""
+    href = (href or "").strip().split("?")[0].split("#")[0]
+    if not href:
+        return ""
+    p = urllib.parse.urlsplit(href)
+    if p.netloc and p.netloc.lower() not in GOWORK_HOSTS:
+        return href
+    return GOWORK_BASE + p.path
+
+
+def _gowork_pick_city(raw: str, search_city: str):
+    """'Toruń +2 lokalizacje' / 'Bydgoszcz, Toruń' -> лучший подходящий город."""
+    raw = re.sub(r"\+\s*\d+.*$", "", _gowork_clean(raw)).strip(" ,")
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    for p in parts:
+        if city_matches(p, search_city):
+            return p
+    return parts[0] if parts else None
+
+
+def extract_gowork_card(card, search_city: str = None):
+    """Разбирает одну карточку GoWork (div.g-job-item). Возвращает dict или None, если карточка битая.
+    Опирается только на BEM-классы, без data-v-* атрибутов."""
+    title_el = (
+        card.select_one(".g-job-item__offer-title h3 a")
+        or card.select_one(".g-job-item__offer-title a")
+        or card.select_one("a[href*='/oferta/']")
+    )
     if not title_el:
         return None
 
     title = strip_html(title_el.get_text(" ", strip=True))
-    link = (title_el.get("href") or "").strip()
+    link = _gowork_abs_url(title_el.get("href"))
     if not title or len(title) < 3 or not link:
         return None
-    if not link.startswith("http"):
-        link = "https://www.gowork.pl" + link
 
-    # ссылка вида /oferta/<slug>,<id>,<city-slug> — id забираем для стабильного external_id
-    m = re.search(r"/oferta/[^,]+,([^,]+),", link)
+    m = GOWORK_ID_RE.search(link)
     ad_id = m.group(1) if m else None
 
-    city_el = card.select_one(".g-job-location")
-    job_city = re.sub(r"\s+", " ", city_el.get_text(" ", strip=True)).strip() if city_el else None
+    # --- теги: зарплата / umowa / etat / (запасной вариант для города) ---
+    tags, seen = [], set()
+    for t in card.select(".g-job-item-content__tag"):
+        txt = _gowork_clean(t.get_text(" ", strip=True))
+        if txt and txt not in seen:
+            seen.add(txt)
+            tags.append(txt)
 
-    # Теги вроде "umowa o pracę", "pełny etat", "11 000 - 21 000 zł/miesiąc" разбросаны
-    # по видимым и скрытым (display:none, разворачиваются по клику) блокам — BeautifulSoup
-    # видит их одинаково, поэтому просто проходим по всем .g-job-item-content__tag карточки.
-    salary = umowa_raw = etat_raw = None
-    for tag in card.select(".g-job-item-content__tag"):
-        if tag.select_one(".g-job-location"):
-            continue  # это блок с городом, уже разобрали выше
-        txt = re.sub(r"\s+", " ", tag.get_text(" ", strip=True)).strip()
-        if not txt:
-            continue
+    salary = umowa = etat = None
+    for txt in tags:
         low = txt.lower()
-        if salary is None and any(x in low for x in ("zł", "eur", "€", "pln")):
+        if not salary and GOWORK_SALARY_RE.search(txt):
             salary = txt
-        elif umowa_raw is None and "umowa" in low:
-            umowa_raw = txt
-        elif etat_raw is None and "etat" in low:
-            etat_raw = txt
+            continue
+        if not umowa and any(x in low for x in ("umowa", "b2b", "kontrakt")):
+            umowa = normalize_umowa(txt)
+            if umowa:
+                continue
+        if not etat and any(x in low for x in ("etat", "3/4", "1/2", "1/4")):
+            etat = normalize_etat(txt, salary)
+
+    # --- город ---
+    raw_city = None
+    loc_el = card.select_one(".g-job-location")
+    if loc_el:
+        raw_city = _gowork_clean(loc_el.get_text(" ", strip=True)) or None
+    if not raw_city:
+        for txt in tags:
+            low = txt.lower()
+            if (not re.search(r"\d", txt) and len(txt) <= 60
+                    and not any(w in low for w in GOWORK_NON_CITY_WORDS)):
+                raw_city = txt
+                break
+    job_city = _gowork_pick_city(raw_city, search_city) if raw_city else None
+
+    # Запасные варианты, как в остальных парсерах (по заголовку / месячной зарплате)
+    umowa = umowa or normalize_umowa(title)
+    etat = etat or normalize_etat(title, salary) or normalize_etat("", salary)
 
     return {
         "ad_id": ad_id,
@@ -1189,18 +1251,42 @@ def extract_gowork_card(card):
         "link": link,
         "city": job_city,
         "salary": salary,
-        "umowa": normalize_umowa(umowa_raw),
-        "etat": normalize_etat(etat_raw, salary),
+        "umowa": umowa,
+        "etat": etat,
     }
+
+
+def _fetch_gowork_via_scraperapi(url: str, attempts: int = 2):
+    """Загружает страницу через ScraperAPI (render=true). Возвращает (status, html)."""
+    params = {"api_key": SCRAPERAPI_KEY, "url": url, "render": "true"}
+    last_status = 0
+    for attempt in range(1, attempts + 1):
+        try:
+            r = cr.get("https://api.scraperapi.com/", params=params, timeout=90)
+            last_status = r.status_code
+            if r.status_code == 200 and r.text:
+                return 200, r.text
+            logger.warning(f"Gowork: ScraperAPI status={r.status_code} (attempt {attempt}/{attempts})")
+        except Exception as e:
+            # маскируем ключ, чтобы он не попал в логи
+            logger.error(f"Gowork: ScraperAPI error (attempt {attempt}/{attempts}): {str(e).replace(SCRAPERAPI_KEY, '***')}")
+        if attempt < attempts:
+            time.sleep(random.uniform(1.5, 3.0))
+    return last_status, ""
 
 
 def fetch_gowork_sync(url: str):
     """
-    Максимально бережный фетч для Gowork: небольшая случайная пауза перед каждым запросом
-    (в дополнение к GOWORK_SEMAPHORE(1), который не даёт двум запросам уйти параллельно
-    даже если одновременно скрейпится несколько городов).
+    Фетч Gowork: случайная пауза (вместе с GOWORK_SEMAPHORE(1) гарантирует один запрос за раз),
+    затем загрузка через сайт-посредник ScraperAPI. Если ключа нет или посредник не отдал страницу —
+    запасной путь через fetch_url_with_retry (curl_cffi -> Cloudflare Worker).
     """
     time.sleep(random.uniform(1.5, 3.0))
+    if SCRAPERAPI_KEY:
+        status, html = _fetch_gowork_via_scraperapi(url)
+        if status == 200 and html:
+            return status, html
+        logger.warning("Gowork: ScraperAPI не отдал страницу, пробуем запасной путь")
     return fetch_url_with_retry(url, "https://www.google.com/")
 
 
@@ -1210,7 +1296,7 @@ async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
         if not slug:
             return 0
 
-        url = f"https://www.gowork.pl/praca/{slug};l/5;km"
+        url = f"{GOWORK_BASE}/praca/{slug};l/{GOWORK_RADIUS_KM};km"
 
         async with GOWORK_SEMAPHORE:
             status, html = await asyncio.to_thread(fetch_gowork_sync, url)
@@ -1222,7 +1308,9 @@ async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
         soup = BeautifulSoup(html, "html.parser")
         cards = soup.select("div.g-job-item")
         if not cards:
-            logger.warning(f"⚠️ Gowork: 0 cards for {city}. Page title: {soup.title.string if soup.title else 'N/A'}")
+            blocked = any(x in html.lower() for x in ("just a moment", "cf-chl", "captcha", "access denied"))
+            logger.warning(f"⚠️ Gowork: 0 cards for {city}{' (похоже на бан-экран/Cloudflare)' if blocked else ''}. "
+                           f"Page title: {soup.title.string if soup.title else 'N/A'}")
             return 0
 
         jobs_to_save = []
@@ -1232,7 +1320,7 @@ async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
 
         for card in cards[:50]:
             try:
-                data = extract_gowork_card(card)
+                data = extract_gowork_card(card, city)
                 if not data:
                     parse_errors += 1
                     continue
