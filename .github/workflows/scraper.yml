@@ -36,7 +36,8 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          CF_WORKER_URL: ${{ secrets.CF_WORKER_URL }} # Передаем адрес воркера в скрипт
+          CF_WORKER_URL: ${{ secrets.CF_WORKER_URL }}
+          SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}
         run: |
           if [ -n "${{ github.event.inputs.city }}" ]; then
             echo "Running on-demand scrape for city: ${{ github.event.inputs.city }}"
