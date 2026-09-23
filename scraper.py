@@ -280,6 +280,66 @@ def get_active_cities_from_db() -> list:
         return CHANNEL_CITIES
 
 
+# Источники, которые в боте (VIP_ONLY_SOURCES) доступны только VIP-юзерам.
+# Держим в одном месте, чтобы бот и парсер не разъехались — если поменяешь список в bot.py,
+# продублируй тут же.
+VIP_ONLY_SOURCES = {"Lento", "Infopraca"}
+
+
+def get_vip_cities_from_db():
+    """
+    Смотрит, в каких городах сейчас сидят активные VIP (users.vip_until > now,
+    город берём из их user_filters, is_paused=False).
+
+    Возвращает (vip_all, vip_slugs):
+      - vip_all=True  -> хотя бы один VIP ищет по всей Польше ("all"), значит
+                         VIP-сайты (Lento/Infopraca) нужно парсить во всех городах.
+      - vip_all=False -> vip_slugs — множество слагов городов, где есть VIP.
+
+    При любой ошибке БД намеренно возвращает (True, set()) — то есть "сканим
+    VIP-сайты везде на всякий случай". Так безопаснее: цена ошибки в другую сторону —
+    VIP кто-то недополучит вакансии, а лишний скан городу ничего не стоит.
+    """
+    try:
+        now_str = datetime.now(timezone.utc).isoformat()
+        r = supabase.table("users").select("telegram_id").gt("vip_until", now_str).execute()
+        vip_ids = [row["telegram_id"] for row in (r.data or []) if row.get("telegram_id")]
+        if not vip_ids:
+            logger.info("👑 VIP cities: активных VIP нет — Lento/Infopraca сегодня не парсим")
+            return False, set()
+
+        cities = set()
+        # .in_() у supabase не резиновый, режем список ID на пачки
+        for i in range(0, len(vip_ids), 200):
+            chunk = vip_ids[i:i + 200]
+            rr = (
+                supabase.table("user_filters")
+                .select("telegram_id, city")
+                .eq("is_paused", False)
+                .in_("telegram_id", chunk)
+                .execute()
+            )
+            for row in (rr.data or []):
+                c = row.get("city")
+                if c:
+                    cities.add(c)
+
+        if not cities:
+            logger.info(f"👑 VIP cities: {len(vip_ids)} VIP, но ни у кого нет активного фильтра города")
+            return False, set()
+
+        if "all" in cities:
+            logger.info(f"👑 VIP cities: есть VIP с фильтром 'вся Польша' -> Lento/Infopraca везде")
+            return True, set()
+
+        slugs = {get_city_slug(c) for c in cities}
+        logger.info(f"👑 VIP cities: {sorted(cities)} -> Lento/Infopraca только тут")
+        return False, slugs
+    except Exception as e:
+        logger.error(f"get_vip_cities_from_db: {e} — сканим VIP-сайты везде на всякий случай")
+        return True, set()
+
+
 # ==================== ПАРСЕРЫ ====================
 
 async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
@@ -1084,16 +1144,31 @@ async def parse_infopraca(city: str, existing_ids: set, lock: asyncio.Lock) -> i
 
 # ==================== ДИСПЕТЧЕР И MAIN ====================
 
-async def scrape_city_task(city: str, existing_ids: set, semaphore: asyncio.Semaphore, lock: asyncio.Lock) -> int:
+async def scrape_city_task(
+    city: str,
+    existing_ids: set,
+    semaphore: asyncio.Semaphore,
+    lock: asyncio.Lock,
+    vip_all: bool = True,
+    vip_slugs: set = None,
+) -> int:
+    vip_slugs = vip_slugs or set()
+    city_has_vip = vip_all or (get_city_slug(city) in vip_slugs)
+
     async with semaphore:
-        results = await asyncio.gather(
+        parse_jobs = [
             parse_olx(city, existing_ids, lock),
             parse_praca_pl(city, existing_ids, lock),
             parse_rocketjobs(city, existing_ids, lock),
-            parse_lento(city, existing_ids, lock),
             parse_fachpraca(city, existing_ids, lock),
-            parse_infopraca(city, existing_ids, lock)
-        )
+        ]
+        if city_has_vip:
+            parse_jobs.append(parse_lento(city, existing_ids, lock))
+            parse_jobs.append(parse_infopraca(city, existing_ids, lock))
+        else:
+            logger.info(f"⏭️ {city}: активных VIP нет — Lento/Infopraca пропускаем")
+
+        results = await asyncio.gather(*parse_jobs)
         return sum(results)
 
 
@@ -1105,10 +1180,11 @@ async def main():
     existing_ids = get_all_existing_ids()
     existing_ids |= get_rocketjobs_ids_all()
     cities = [args.city] if args.city else (get_active_cities_from_db() or MAIN_SCAN_CITIES[:5])
+    vip_all, vip_slugs = get_vip_cities_from_db()
 
     city_sem = asyncio.Semaphore(3)
     ids_lock = asyncio.Lock()
-    tasks = [scrape_city_task(c, existing_ids, city_sem, ids_lock) for c in cities]
+    tasks = [scrape_city_task(c, existing_ids, city_sem, ids_lock, vip_all, vip_slugs) for c in cities]
     results = await asyncio.gather(*tasks)
 
     logger.info(f"✅ Done. Total saved across all cities: {sum(results)}")
