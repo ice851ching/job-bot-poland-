@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 # Семафоры для контроля параллельности запросов
 LENTO_SEMAPHORE = asyncio.Semaphore(1)  # Lento строго в 1 поток, чтобы не провоцировать WAF Rate Limit
+GOWORK_SEMAPHORE = asyncio.Semaphore(1)  # Gowork тоже очень чувствителен — строго 1 запрос за раз по всему прогону
 
 # Города твоих Telegram-каналов (парсер будет шерстить их ВСЕГДА!)
 CHANNEL_CITIES = [
@@ -283,7 +284,7 @@ def get_active_cities_from_db() -> list:
 # Источники, которые в боте (VIP_ONLY_SOURCES) доступны только VIP-юзерам.
 # Держим в одном месте, чтобы бот и парсер не разъехались — если поменяешь список в bot.py,
 # продублируй тут же.
-VIP_ONLY_SOURCES = {"Lento", "Infopraca"}
+VIP_ONLY_SOURCES = {"Lento", "Infopraca", "Gowork"}
 
 
 def get_vip_cities_from_db():
@@ -1142,6 +1143,138 @@ async def parse_infopraca(city: str, existing_ids: set, lock: asyncio.Lock) -> i
         return 0
 
 
+# ==================== GOWORK.PL (VIP, максимально бережный режим) ====================
+
+def extract_gowork_card(card):
+    """Разбирает одну карточку Gowork (div.g-job-item). Возвращает dict или None."""
+    title_el = card.select_one(".g-job-item__offer-title h3 a")
+    if not title_el:
+        return None
+
+    title = strip_html(title_el.get_text(" ", strip=True))
+    link = (title_el.get("href") or "").strip()
+    if not title or len(title) < 3 or not link:
+        return None
+    if not link.startswith("http"):
+        link = "https://www.gowork.pl" + link
+
+    # ссылка вида /oferta/<slug>,<id>,<city-slug> — id забираем для стабильного external_id
+    m = re.search(r"/oferta/[^,]+,([^,]+),", link)
+    ad_id = m.group(1) if m else None
+
+    city_el = card.select_one(".g-job-location")
+    job_city = re.sub(r"\s+", " ", city_el.get_text(" ", strip=True)).strip() if city_el else None
+
+    # Теги вроде "umowa o pracę", "pełny etat", "11 000 - 21 000 zł/miesiąc" разбросаны
+    # по видимым и скрытым (display:none, разворачиваются по клику) блокам — BeautifulSoup
+    # видит их одинаково, поэтому просто проходим по всем .g-job-item-content__tag карточки.
+    salary = umowa_raw = etat_raw = None
+    for tag in card.select(".g-job-item-content__tag"):
+        if tag.select_one(".g-job-location"):
+            continue  # это блок с городом, уже разобрали выше
+        txt = re.sub(r"\s+", " ", tag.get_text(" ", strip=True)).strip()
+        if not txt:
+            continue
+        low = txt.lower()
+        if salary is None and any(x in low for x in ("zł", "eur", "€", "pln")):
+            salary = txt
+        elif umowa_raw is None and "umowa" in low:
+            umowa_raw = txt
+        elif etat_raw is None and "etat" in low:
+            etat_raw = txt
+
+    return {
+        "ad_id": ad_id,
+        "title": title,
+        "link": link,
+        "city": job_city,
+        "salary": salary,
+        "umowa": normalize_umowa(umowa_raw),
+        "etat": normalize_etat(etat_raw, salary),
+    }
+
+
+def fetch_gowork_sync(url: str):
+    """
+    Максимально бережный фетч для Gowork: небольшая случайная пауза перед каждым запросом
+    (в дополнение к GOWORK_SEMAPHORE(1), который не даёт двум запросам уйти параллельно
+    даже если одновременно скрейпится несколько городов).
+    """
+    time.sleep(random.uniform(1.5, 3.0))
+    return fetch_url_with_retry(url, "https://www.google.com/")
+
+
+async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
+    try:
+        slug = get_city_slug(city)
+        if not slug:
+            return 0
+
+        url = f"https://www.gowork.pl/praca/{slug};l/5;km"
+
+        async with GOWORK_SEMAPHORE:
+            status, html = await asyncio.to_thread(fetch_gowork_sync, url)
+
+        if status != 200 or not html:
+            logger.warning(f"Gowork returned status {status} for {city}")
+            return 0
+
+        soup = BeautifulSoup(html, "html.parser")
+        cards = soup.select("div.g-job-item")
+        if not cards:
+            logger.warning(f"⚠️ Gowork: 0 cards for {city}. Page title: {soup.title.string if soup.title else 'N/A'}")
+            return 0
+
+        jobs_to_save = []
+        ignored_duplicate = 0
+        ignored_city = 0
+        parse_errors = 0
+
+        for card in cards[:50]:
+            try:
+                data = extract_gowork_card(card)
+                if not data:
+                    parse_errors += 1
+                    continue
+
+                job_city = data["city"] or city
+                if not city_matches(job_city, city):
+                    ignored_city += 1
+                    continue
+
+                ext_id = hashlib.md5(f"gowork_{data['ad_id'] or data['link']}".encode()).hexdigest()
+
+                async with lock:
+                    if ext_id in existing_ids:
+                        ignored_duplicate += 1
+                        continue
+                    existing_ids.add(ext_id)
+
+                jobs_to_save.append({
+                    "external_id": ext_id,
+                    "title": data["title"],
+                    "city": job_city,
+                    "salary": data["salary"],
+                    "url": data["link"],
+                    "source": "Gowork",
+                    "umowa": data["umowa"],
+                    "etat": data["etat"],
+                })
+            except Exception as e:
+                parse_errors += 1
+                logger.debug(f"Gowork card error: {e}")
+
+        saved = await db_insert_jobs_batch(jobs_to_save)
+        logger.info(
+            f"Gowork saved={saved} (cards={len(cards)}, duplicates={ignored_duplicate}, "
+            f"city_mismatch={ignored_city}, errors={parse_errors}) city={city}"
+        )
+        return saved
+    except Exception as e:
+        logger.error(f"parse_gowork({city}) error: {e}")
+        return 0
+
+
 # ==================== ДИСПЕТЧЕР И MAIN ====================
 
 async def scrape_city_task(
@@ -1165,8 +1298,9 @@ async def scrape_city_task(
         if city_has_vip:
             parse_jobs.append(parse_lento(city, existing_ids, lock))
             parse_jobs.append(parse_infopraca(city, existing_ids, lock))
+            parse_jobs.append(parse_gowork(city, existing_ids, lock))
         else:
-            logger.info(f"⏭️ {city}: активных VIP нет — Lento/Infopraca пропускаем")
+            logger.info(f"⏭️ {city}: активных VIP нет — Lento/Infopraca/Gowork пропускаем")
 
         results = await asyncio.gather(*parse_jobs)
         return sum(results)
