@@ -1320,8 +1320,18 @@ def _fetch_gowork_via_proxies(url: str, attempts: int = 3):
     }
 
     last_status = 0
-    # random.sample = случайный выбор, но без повторного выбора того же (возможно мёртвого) прокси
-    chosen = random.sample(proxies, min(attempts, len(proxies)))
+    # Случайный порядок; разные аккаунты Webshare могут давать один и тот же ip:port,
+    # поэтому на попытках берём только РАЗНЫЕ IP (а какой из аккаунтов — решает случай, трафик делится поровну)
+    chosen = []
+    seen_hosts = set()
+    for p in random.sample(proxies, len(proxies)):
+        host = _mask_proxy(p)
+        if host in seen_hosts:
+            continue
+        seen_hosts.add(host)
+        chosen.append(p)
+        if len(chosen) >= attempts:
+            break
     for i, proxy in enumerate(chosen, start=1):
         masked = _mask_proxy(proxy)
         try:
