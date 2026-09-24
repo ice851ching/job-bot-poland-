@@ -69,7 +69,14 @@ VIP_DURATION_DAYS = 60         # срок VIP за одну покупку
 VIP_PAYLOAD = "vip_60d"        # идентификатор товара в инвойсе
 
 # Источники, которые получают только VIP-пользователи (у бесплатных: OLX, Praca.pl, RocketJobs, Lento)
-VIP_ONLY_SOURCES = {"GoWork", "Infopraca"}
+# Ключи VIP-источников: сравниваются НЕ по точному совпадению, а по префиксу нормализованного
+# названия (регистр, пробелы, точки, "(beta)" и т.п. игнорируются): "GoWork", "Gowork.pl", "GoWork (beta)" -> "gowork"
+VIP_ONLY_SOURCES = {"gowork", "infopraca"}
+
+def is_vip_source(source) -> bool:
+    """True, если вакансия из источника, доступного только VIP (GoWork / Infopraca)."""
+    key = re.sub(r"[^a-z0-9]", "", str(source or "").lower())
+    return any(key.startswith(v) for v in VIP_ONLY_SOURCES)
 
 # Слать ли VIP-источники в каналы-сателлиты. False = каналы получают только бесплатные 4 сайта.
 CHANNELS_ALLOW_VIP_SOURCES = False
@@ -1311,7 +1318,7 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
                 continue
 
             # GoWork / Infopraca — только для VIP (не помечаем как отправленные: после покупки VIP они дойдут)
-            if not is_vip and job.get("source") in VIP_ONLY_SOURCES:
+            if not is_vip and is_vip_source(job.get("source")):
                 vip_only += 1
                 continue
 
@@ -1435,7 +1442,7 @@ async def post_jobs_to_channels():
                     continue
                 if is_invalid_olx_url(job.get("url")) or is_delivery_job(job):
                     continue
-                if not CHANNELS_ALLOW_VIP_SOURCES and job.get("source") in VIP_ONLY_SOURCES:
+                if not CHANNELS_ALLOW_VIP_SOURCES and is_vip_source(job.get("source")):
                     continue
                 new_jobs.append(job)
 
