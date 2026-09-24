@@ -147,9 +147,11 @@ CHANNELS_MAPPING = {
     "Częstochowa": {"id": -1004372087006, "limit": 5},                     # @Praca_Czestochowa
     "Rzeszów": {"id": -1003849575739, "limit": 5},                         # @Praca_rzeszow_ua
     "Gdynia": {"id": -1004432735605, "limit": 5},                          # @Praca_w_Gdynie
-    # Познань: редкие посты (не чаще 1 раза в 2.5 ч) + без звука (по просьбе админа)
-    "Poznań": {"id": -1001716517416, "limit": 3, "thread_id": 81854,
-               "interval_hours": 2.5, "silent": True},                    # Ветка познань
+    # Познань (по просьбе админа): до 8 вакансий за пост, не чаще раза в 2.5 ч,
+    # только с 09:00 до 21:00 по Варшаве, без звука
+    "Poznań": {"id": -1001716517416, "limit": 8, "thread_id": 81854,
+               "interval_hours": 2.5, "silent": True,
+               "active_hours": (9, 21)},                                  # Ветка познань
     "Bydgoszcz": {"id": -1001759834702, "limit": 5, "thread_id": 1427}    # Ветка 1445 в Быдгощ @ua_bydgoszcz
 }
 
@@ -1410,6 +1412,7 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
 # Необязательные опции канала в CHANNELS_MAPPING:
 #   "interval_hours": 2.5  — постить не чаще, чем раз в N часов (по умолчанию — каждый цикл, раз в 15 мин)
 #   "silent": True         — отправлять без звука (disable_notification=True)
+#   "active_hours": (9, 21) — постить только с 09:00 до 21:00 по Варшаве (вне окна канал молчит)
 # Время последнего поста хранится в памяти: после рестарта бота первый пост уйдёт сразу, дальше — по интервалу.
 _channel_last_post: dict = {}
 
@@ -1426,6 +1429,13 @@ async def post_jobs_to_channels():
             thread_id = config.get("thread_id", None)
             interval_h = config.get("interval_hours")
             silent = config.get("silent", False)
+
+            # Тихие часы: вне окна active_hours (время Варшавы) канал не трогаем
+            active_hours = config.get("active_hours")
+            if active_hours:
+                hour_now = datetime.now(ZoneInfo("Europe/Warsaw")).hour
+                if not (active_hours[0] <= hour_now < active_hours[1]):
+                    continue
 
             # Троттлинг: канал с interval_hours пропускаем, пока не прошёл интервал с прошлого поста
             if interval_h:
