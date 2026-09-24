@@ -157,24 +157,46 @@ def fetch_url(url: str, impersonate_target: str = "chrome120", referer: str = No
 
 TARGET_BROWSERS = ["chrome120", "chrome110", "edge101", "safari184"]
 
+# Домены, на которых В ЭТОМ ЗАПУСКЕ все браузерные профили уже получили 403 (IP раннера заблокирован).
+# Раз IP забанен, дальше по этому домену не тратим ~5-8 сек на 4 заведомо провальных запроса + паузы,
+# а сразу идём через Cloudflare Worker. Сбрасывается сам при каждом новом запуске (новый раннер = новый IP).
+_DIRECT_BLOCKED_DOMAINS = set()
+
+
+def _base_domain(url: str) -> str:
+    host = urllib.parse.urlparse(url).netloc.split(":")[0]
+    return ".".join(host.split(".")[-2:])  # torun.lento.pl -> lento.pl
+
+
 def fetch_url_with_retry(url: str, referer: str = None):
+    domain = _base_domain(url)
+    skip_direct = domain in _DIRECT_BLOCKED_DOMAINS
+
     # 1. Пробуем получить страницу стандартным бронебойным путем (через curl_cffi)
-    for browser in TARGET_BROWSERS:
-        status, html = fetch_url(url, browser, referer)
-        if status == 200 and html:
-            return status, html
-        if status == 403:
-            logger.debug(f"Got 403 with {browser} for {url}. Retrying with next profile...")
-            time.sleep(1.0)
-            continue
-        # Если статус не 403 и не 200 (например, 500 или 404), выходим
-        if status != 0:
-            return status, html
-            
+    if not skip_direct:
+        saw_403 = False
+        for browser in TARGET_BROWSERS:
+            status, html = fetch_url(url, browser, referer)
+            if status == 200 and html:
+                return status, html
+            if status == 403:
+                saw_403 = True
+                logger.debug(f"Got 403 with {browser} for {url}. Retrying with next profile...")
+                time.sleep(1.0)
+                continue
+            # Если статус не 403 и не 200 (например, 500 или 404), выходим
+            if status != 0:
+                return status, html
+
+        if saw_403:
+            _DIRECT_BLOCKED_DOMAINS.add(domain)
+            logger.warning(f"🚫 {domain}: прямой доступ заблокирован (403) — до конца запуска идём сразу через Worker")
+
     # 2. АВАРИЙНЫЙ РЕЖИМ (ПЛАН Б): Если все браузеры поймали 403 (блокировка IP), задействуем Cloudflare Worker
     if CF_WORKER_URL:
         try:
-            logger.warning(f"🚨 АВАРИЙНЫЙ РЕЖИМ: IP заблокирован. Пробуем пробить через Cloudflare Worker для {url}")
+            if not skip_direct:
+                logger.warning(f"🚨 АВАРИЙНЫЙ РЕЖИМ: IP заблокирован. Пробуем пробить через Cloudflare Worker для {url}")
             encoded_url = urllib.parse.quote(url, safe='')
             worker_target_url = f"{CF_WORKER_URL}?url={encoded_url}"
             
