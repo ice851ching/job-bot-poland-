@@ -68,10 +68,10 @@ VIP_PRICE_PLN = 8              # ориентировочная цена в зл
 VIP_DURATION_DAYS = 60         # срок VIP за одну покупку
 VIP_PAYLOAD = "vip_60d"        # идентификатор товара в инвойсе
 
-# Источники, которые получают только VIP-пользователи (у бесплатных: OLX, Praca.pl, RocketJobs)
-VIP_ONLY_SOURCES = {"Lento", "Infopraca"}
+# Источники, которые получают только VIP-пользователи (у бесплатных: OLX, Praca.pl, RocketJobs, Lento)
+VIP_ONLY_SOURCES = {"GoWork", "Infopraca"}
 
-# Слать ли VIP-источники в каналы-сателлиты. False = каналы получают только бесплатные 3 сайта.
+# Слать ли VIP-источники в каналы-сателлиты. False = каналы получают только бесплатные 4 сайта.
 CHANNELS_ALLOW_VIP_SOURCES = False
 
 BLOCKED_KEYWORDS = [
@@ -171,7 +171,7 @@ TEXTS = {
         "welcome": (
             "👋 Привет! Я помогу найти работу в Польше.\n\n"
             "Буду присылать свежие вакансии по мере их появления "
-            "с OLX, Praca.pl и RocketJobs.\n\n"
+            "с OLX, Praca.pl, RocketJobs и Lento.pl.\n\n"
             "Выбери язык:"
         ),
         "choose_city": "🏙 Выбери город:",
@@ -183,7 +183,7 @@ TEXTS = {
             "🏙 Город: {city}\n"
             "⏰ Занятость: {etat}\n"
             "📋 Договор: {umowa}\n\n"
-            "🔍 Ищу свежие вакансии на OLX, Praca.pl и Rocket Jobs..."
+            "🔍 Ищу свежие вакансии на OLX, Praca.pl, Rocket Jobs и Lento.pl..."
         ),
         "loading_city": (
             "🔍 По этому городу собираю свежие вакансии...\n"
@@ -203,12 +203,12 @@ TEXTS = {
         "help": (
             "🤖 <b>Что умеет бот:</b>\n\n"
             "Агрегирует публично доступные вакансии "
-            "с OLX, Praca.pl и RocketJobs и присылает их тебе.\n\n"
+            "с OLX, Praca.pl, RocketJobs и Lento.pl и присылает их тебе.\n\n"
             "<b>Управление:</b>\n"
             "<b>🔄 Сбросить фильтры</b> — настроить фильтры заново\n"
             "<b>⏹ Остановить</b> — остановить рассылку\n"
             "<b>ℹ️ Помощь/VIP</b> — эта справка\n"
-            "<b>/vip</b> — ⭐ VIP-версия: 5 сайтов вместо 3, поиск без остановок и стильные шаблоны резюме\n"
+            "<b>/vip</b> — ⭐ VIP-версия: 6 сайтов вместо 4, поиск без остановок и стильные шаблоны резюме\n"
             "<b>#⃣ Создать резюме</b> — конструктор резюме с моментальным получением PDF в чат (лимит: 3 резюме в день)\n\n"
             "По вопросам и сотрудничеству: @Hriaker1"
         ),
@@ -219,7 +219,7 @@ TEXTS = {
         "after_initial": (
             "👆 Это были последние актуальные вакансии за сегодня.\n\n"
             "🔄 Теперь бот будет присылать только новые вакансии "
-            "по мере их появления на OLX, Praca.pl и RocketJobs."
+            "по мере их появления на OLX, Praca.pl, RocketJobs и Lento.pl."
         ),
         "search_paused": (
             "⏸ <b>Поиск временно приостановлен</b>\n\n"
@@ -230,8 +230,8 @@ TEXTS = {
         "search_renewed": "🟢 Отлично! Поиск успешно возобновлен еще на 3 дня. Свежие вакансии уже в пути! 🚀",
         "vip_promo": (
             "⭐ <b>Хочешь больше вакансий?</b>\n\n"
-            "С <b>VIP</b> бот ищет на <b>5 сайтах вместо 3</b> — добавляются "
-            "<b>Lento.pl</b> и <b>Infopraca.pl</b>, а поиск работает "
+            "С <b>VIP</b> бот ищет на <b>6 сайтах вместо 4</b> — добавляются "
+            "<b>GoWork.pl</b> (beta) и <b>Infopraca.pl</b>, а поиск работает "
             "<b>без остановок каждые 3 дня</b>. А ещё — <b>стильные VIP-шаблоны резюме</b>.\n\n"
             "💰 <b>{price} ⭐ (≈{price_pln} zł) = {days} дней VIP</b>\n\n"
             "👇 Подробнее — кнопка ниже или команда /vip"
@@ -239,17 +239,20 @@ TEXTS = {
         "vip_info": (
             "⭐ <b>VIP-версия</b>\n\n"
             "<b>Что даёт VIP:</b>\n"
-            "• <b>+2 сайта в поиске</b> — всего 5 вместо 3:\n"
-            "   🔹 <b>Lento.pl</b> — большой польский сайт локальных объявлений (что-то вроде OLX). "
-            "В разделе «Praca» часто попадаются вакансии от небольших работодателей.\n"
-            "   🔹 <b>Infopraca.pl</b> — польский портал вакансий: предложения от работодателей "
-            "и агентств по всей Польше.\n"
+            "• <b>+2 сайта в поиске</b> — всего 6 вместо 4:\n"
+            "   🔹 <b>GoWork.pl (beta)</b> — элитные вакансии и проверенные работодатели. "
+            "Источник №1 в Польше по объёму прямых предложений от фирм. "
+            "В VIP-ленте ты получаешь вакансии с GoWork мгновенно — откликайся раньше 90% других кандидатов, "
+            "пока объявление не утонуло в спаме.\n"
+            "   🔹 <b>Infopraca.pl</b> — доступ к надёжным польским фирмам. "
+            "Площадка, где работодатели платят за размещение вакансий, а значит — ищут сотрудников всерьёз. "
+            "В VIP-подписке ты не пропустишь ни одного официального оффера с InfoPraca.\n"
             "• <b>Поиск без остановок</b> — в бесплатном плане поиск нужно подтверждать каждые 3 дня, "
             "в VIP этого нет.\n"
             "• <b>Стильные шаблоны резюме</b> — в конструкторе резюме (#⃣) открываются эксклюзивные VIP-шаблоны с более современным дизайном.\n\n"
             "<b>Сравнение:</b>\n"
-            "🆓 Бесплатно: OLX, Praca.pl, RocketJobs + подтверждение каждые 3 дня + базовые шаблоны резюме\n"
-            "⭐ VIP: OLX, Praca.pl, RocketJobs + Lento.pl + Infopraca.pl, без остановок + стильные шаблоны резюме\n\n"
+            "🆓 Бесплатно: OLX, Praca.pl, RocketJobs, Lento.pl + подтверждение каждые 3 дня + базовые шаблоны резюме\n"
+            "⭐ VIP: OLX, Praca.pl, RocketJobs, Lento.pl + GoWork.pl (beta) + Infopraca.pl, без остановок + стильные шаблоны резюме\n\n"
             "💰 <b>Цена: {price} ⭐ (≈{price_pln} zł) Telegram Stars за {days} дней VIP.</b>\n"
             "Разовый платёж, автопродления нет."
         ),
@@ -258,12 +261,12 @@ TEXTS = {
         "btn_extend_vip": "⭐ Продлить на {days} дней — {price} ⭐ (≈{price_pln} zł)",
         "btn_vip_details": "ℹ️ Подробнее про VIP",
         "vip_invoice_title": "VIP на {days} дней",
-        "vip_invoice_desc": "5 сайтов вместо 3 (+ Lento.pl и Infopraca.pl) и поиск без остановок каждые 3 дня + стильные шаблоны резюме. Срок действия — {days} дней.",
+        "vip_invoice_desc": "6 сайтов вместо 4 (+ GoWork.pl и Infopraca.pl) и поиск без остановок каждые 3 дня + стильные шаблоны резюме. Срок действия — {days} дней.",
         "vip_invoice_label": "VIP {days} дней",
         "vip_thanks": (
             "🎉 <b>Оплата прошла — VIP активирован!</b>\n\n"
             "VIP действует до <b>{until}</b>.\n"
-            "Теперь бот ищет на 5 сайтах (добавились Lento.pl и Infopraca.pl) "
+            "Теперь бот ищет на 6 сайтах (добавились GoWork.pl и Infopraca.pl) "
             "и не останавливается каждые 3 дня. Также тебе открылись стильные VIP-шаблоны резюме. Спасибо за поддержку! ⭐"
         ),
         "vip_pay_error": "⚠️ Оплата прошла, но при активации VIP возникла ошибка. Напиши @Hriaker1 — всё быстро исправим.",
@@ -277,7 +280,7 @@ TEXTS = {
     "pl": {
         "welcome": (
             "👋 Cześć! Pomogę znaleźć pracę w Polsce.\n\n"
-            "Będę wysyłać nowe oferty na bieżąco z OLX, Praca.pl i RocketJobs.\n\n"
+            "Będę wysyłać nowe oferty na bieżąco z OLX, Praca.pl, RocketJobs i Lento.pl.\n\n"
             "Wybierz język:"
         ),
         "choose_city": "🏙 Wybierz miasto:",
@@ -289,7 +292,7 @@ TEXTS = {
             "🏙 Miasto: {city}\n"
             "⏰ Etat: {etat}\n"
             "📋 Umowa: {umowa}\n\n"
-            "🔍 Szukam ofert na OLX, Praca.pl i RocketJobs..."
+            "🔍 Szukam ofert na OLX, Praca.pl, RocketJobs i Lento.pl..."
         ),
         "loading_city": "🔍 Szukam nowych ofert dla tego miasta...\nPoczekaj 30–60 секунд.",
         "no_jobs": "😔 Brak ofert. Sprawdzam co 15 min!",
@@ -302,11 +305,11 @@ TEXTS = {
         "reset_msg": "🔄 Zresetowano! Zaczynamy od nowа.\n\nWybierz język:",
         "help": (
             "🤖 <b>Co robi bot:</b>\n\n"
-            "Agreguje oferty pracy z OLX, Praca.pl i RocketJobs.\n\n"
+            "Agreguje oferty pracy z OLX, Praca.pl, RocketJobs i Lento.pl.\n\n"
             "<b>🔄 Ustaw od nowa</b> — ustaw filtry od nowa\n"
             "<b>⏹ Zatrzymaj</b> — zatrzymaj wysyłkę\n"
             "<b>ℹ️ Pomoc/VIP</b> — ta pomoc\n"
-            "<b>/vip</b> — ⭐ wersja VIP: 5 serwisów zamiast 3, wyszukiwanie bez przerw i stylowe szablony CV\n"
+            "<b>/vip</b> — ⭐ wersja VIP: 6 serwisów zamiast 4, wyszukiwanie bez przerw i stylowe szablony CV\n"
             "<b>#⃣ Stwórz CV</b> — kreator CV z bezpośrednim przesłaniem PDF (limit: 3 na dobę)\n\n"
             "Pytania i współpraca: @Hriaker1"
         ),
@@ -327,8 +330,8 @@ TEXTS = {
         "search_renewed": "🟢 Super! Wyszukiwanie zostało wznowione na kolejne 3 dni. Nowe oferty już wkrótce! 🚀",
         "vip_promo": (
             "⭐ <b>Chcesz więcej ofert?</b>\n\n"
-            "Z <b>VIP</b> bot szuka na <b>5 serwisach zamiast 3</b> — dochodzą "
-            "<b>Lento.pl</b> i <b>Infopraca.pl</b>, a wyszukiwanie działa "
+            "Z <b>VIP</b> bot szuka na <b>6 serwisach zamiast 4</b> — dochodzą "
+            "<b>GoWork.pl</b> (beta) i <b>Infopraca.pl</b>, a wyszukiwanie działa "
             "<b>bez przerw co 3 dni</b>. Do tego — <b>stylowe szablony CV VIP</b>.\n\n"
             "💰 <b>{price} ⭐ (≈{price_pln} zł) = {days} dni VIP</b>\n\n"
             "👇 Szczegóły — przycisk poniżej lub komenda /vip"
@@ -336,17 +339,20 @@ TEXTS = {
         "vip_info": (
             "⭐ <b>Wersja VIP</b>\n\n"
             "<b>Co daje VIP:</b>\n"
-            "• <b>+2 serwisy w wyszukiwaniu</b> — razem 5 zamiast 3:\n"
-            "   🔹 <b>Lento.pl</b> — duży polski serwis ogłoszeń lokalnych (coś jak OLX). "
-            "W dziale „Praca” często trafiają się oferty od mniejszych pracodawców.\n"
-            "   🔹 <b>Infopraca.pl</b> — polski portal z ofertami pracy od pracodawców "
-            "i agencji z całej Polski.\n"
+            "• <b>+2 serwisy w wyszukiwaniu</b> — razem 6 zamiast 4:\n"
+            "   🔹 <b>GoWork.pl (beta)</b> — elitarne oferty i sprawdzeni pracodawcy. "
+            "Źródło nr 1 w Polsce pod względem liczby ofert bezpośrednio od firm. "
+            "W feedzie VIP dostajesz oferty z GoWork natychmiast — aplikuj szybciej niż 90% innych kandydatów, "
+            "zanim ogłoszenie utonie w spamie.\n"
+            "   🔹 <b>Infopraca.pl</b> — dostęp do wiarygodnych polskich firm. "
+            "Platforma, na której pracodawcy płacą za publikację ofert, a więc szukają pracowników na serio. "
+            "W subskrypcji VIP nie przegapisz żadnej oficjalnej oferty z InfoPraca.\n"
             "• <b>Wyszukiwanie bez przerw</b> — w wersji darmowej trzeba co 3 dni potwierdzać "
             "wyszukiwanie, w VIP nie.\n"
             "• <b>Stylowe szablony CV</b> — w kreatorze CV (#⃣) odblokowują się ekskluzywne szablony VIP o nowocześniejszym designie.\n\n"
             "<b>Porównanie:</b>\n"
-            "🆓 Darmowa: OLX, Praca.pl, RocketJobs + potwierdzenie co 3 dni + podstawowe szablony CV\n"
-            "⭐ VIP: OLX, Praca.pl, RocketJobs + Lento.pl + Infopraca.pl, bez przerw + stylowe szablony CV\n\n"
+            "🆓 Darmowa: OLX, Praca.pl, RocketJobs, Lento.pl + potwierdzenie co 3 dni + podstawowe szablony CV\n"
+            "⭐ VIP: OLX, Praca.pl, RocketJobs, Lento.pl + GoWork.pl (beta) + Infopraca.pl, bez przerw + stylowe szablony CV\n\n"
             "💰 <b>Cena: {price} ⭐ (≈{price_pln} zł) Telegram Stars za {days} dni VIP.</b>\n"
             "Płatność jednorazowa, bez automatycznego odnawiania."
         ),
@@ -355,12 +361,12 @@ TEXTS = {
         "btn_extend_vip": "⭐ Przedłuż o {days} dni — {price} ⭐ (≈{price_pln} zł)",
         "btn_vip_details": "ℹ️ Więcej o VIP",
         "vip_invoice_title": "VIP na {days} dni",
-        "vip_invoice_desc": "5 serwisów zamiast 3 (+ Lento.pl i Infopraca.pl) i wyszukiwanie bez przerw co 3 dni + stylowe szablony CV. Okres ważności — {days} dni.",
+        "vip_invoice_desc": "6 serwisów zamiast 4 (+ GoWork.pl i Infopraca.pl) i wyszukiwanie bez przerw co 3 dni + stylowe szablony CV. Okres ważności — {days} dni.",
         "vip_invoice_label": "VIP {days} dni",
         "vip_thanks": (
             "🎉 <b>Płatność przyjęta — VIP aktywowany!</b>\n\n"
             "VIP działa do <b>{until}</b>.\n"
-            "Bot szuka teraz na 5 serwisach (doszły Lento.pl i Infopraca.pl) "
+            "Bot szuka teraz na 6 serwisach (doszły GoWork.pl i Infopraca.pl) "
             "i nie zatrzymuje się co 3 dni. Odblokowały się też stylowe szablony CV VIP. Dziękuję za wsparcie! ⭐"
         ),
         "vip_pay_error": "⚠️ Płatność przeszła, ale wystąpił błąd przy aktywacji VIP. Napisz do @Hriaker1 — szybko to naprawimy.",
@@ -374,7 +380,7 @@ TEXTS = {
     "ua": {
         "welcome": (
             "👋 Привіт! Допоможу знайти роботу в Польщі.\n\n"
-            "Бот надсилатиме нові вакансії з OLX, Praca.pl та RocketJobs.\n\n"
+            "Бот надсилатиме нові вакансії з OLX, Praca.pl, RocketJobs та Lento.pl.\n\n"
             "Обери мову:"
         ),
         "choose_city": "🏙 Обери місто:",
@@ -386,7 +392,7 @@ TEXTS = {
             "🏙 Місто: {city}\n"
             "⏰ Зайнятість: {etat}\n"
             "📋 Договір: {umowa}\n\n"
-            "🔍 Шукаю вакансії на OLX, Praca.pl та RocketJobs..."
+            "🔍 Шукаю вакансії на OLX, Praca.pl, RocketJobs та Lento.pl..."
         ),
         "loading_city": "🔍 Шукаю свіжі вакансії для этого міста...\nЗачекай 30–60 секунд.",
         "no_jobs": "😔 Немає вакансій. Перевірю через 15 хв!",
@@ -399,11 +405,11 @@ TEXTS = {
         "reset_msg": "🔄 Скинуто! Починаємо заново.\n\nОбери мову:",
         "help": (
             "🤖 <b>Що вміє бот:</b>\n\n"
-            "Агрегує публічні вакансії з OLX, Praca.pl та RocketJobs.\n\n"
+            "Агрегує публічні вакансії з OLX, Praca.pl, RocketJobs та Lento.pl.\n\n"
             "<b>🔄 Скинути фільтри</b> — налаштувати фільтри заново\n"
             "<b>⏹ Зупинити</b> — зупинити розсилку\n"
             "<b>ℹ️ Допомога/VIP</b> — ця довідка\n"
-            "<b>/vip</b> — ⭐ VIP-версія: 5 сайтів замість 3, пошук без зупинок і стильні шаблони резюме\n"
+            "<b>/vip</b> — ⭐ VIP-версія: 6 сайтів замість 4, пошук без зупинок і стильні шаблони резюме\n"
             "<b>#⃣ Створити резюме</b> — конструктор резюме з миттєвим отриманням PDF в чаті (ліміт: 3 на день)\n\n"
             "Питання та співпраця: @Hriaker1"
         ),
@@ -424,8 +430,8 @@ TEXTS = {
         "search_renewed": "🟢 Чудово! Пошук успішно відновлено ще на 3 дні. Свіжі вакансії вже летять до тебе! 🚀",
         "vip_promo": (
             "⭐ <b>Хочеш більше вакансій?</b>\n\n"
-            "З <b>VIP</b> бот шукає на <b>5 сайтах замість 3</b> — додаються "
-            "<b>Lento.pl</b> та <b>Infopraca.pl</b>, а пошук працює "
+            "З <b>VIP</b> бот шукає на <b>6 сайтах замість 4</b> — додаються "
+            "<b>GoWork.pl</b> (beta) та <b>Infopraca.pl</b>, а пошук працює "
             "<b>без зупинок кожні 3 дні</b>. А ще — <b>стильні VIP-шаблони резюме</b>.\n\n"
             "💰 <b>{price} ⭐ (≈{price_pln} zł) = {days} днів VIP</b>\n\n"
             "👇 Докладніше — кнопка нижче або команда /vip"
@@ -433,17 +439,20 @@ TEXTS = {
         "vip_info": (
             "⭐ <b>VIP-версія</b>\n\n"
             "<b>Що дає VIP:</b>\n"
-            "• <b>+2 сайти в пошуку</b> — разом 5 замість 3:\n"
-            "   🔹 <b>Lento.pl</b> — великий польський сайт локальних оголошень (щось на кшталт OLX). "
-            "У розділі «Praca» часто трапляються вакансії від невеликих роботодавців.\n"
-            "   🔹 <b>Infopraca.pl</b> — польський портал вакансій: пропозиції від роботодавців "
-            "та агенцій по всій Польщі.\n"
+            "• <b>+2 сайти в пошуку</b> — разом 6 замість 4:\n"
+            "   🔹 <b>GoWork.pl (beta)</b> — елітні вакансії та перевірені роботодавці. "
+            "Джерело №1 у Польщі за обсягом прямих пропозицій від фірм. "
+            "У VIP-стрічці ти отримуєш вакансії з GoWork миттєво — відгукуйся раніше за 90% інших кандидатів, "
+            "поки оголошення не потонуло в спамі.\n"
+            "   🔹 <b>Infopraca.pl</b> — доступ до надійних польських фірм. "
+            "Майданчик, де роботодавці платять за розміщення вакансій, а отже — шукають працівників серйозно. "
+            "У VIP-підписці ти не пропустиш жодної офіційної пропозиції з InfoPraca.\n"
             "• <b>Пошук без зупинок</b> — у безкоштовному плані пошук треба підтверджувати кожні 3 дні, "
             "у VIP цього немає.\n"
             "• <b>Стильні шаблони резюме</b> — у конструкторі резюме (#⃣) відкриваються ексклюзивні VIP-шаблони з сучаснішим дизайном.\n\n"
             "<b>Порівняння:</b>\n"
-            "🆓 Безкоштовно: OLX, Praca.pl, RocketJobs + підтвердження кожні 3 дні + базові шаблони резюме\n"
-            "⭐ VIP: OLX, Praca.pl, RocketJobs + Lento.pl + Infopraca.pl, без зупинок + стильні шаблони резюме\n\n"
+            "🆓 Безкоштовно: OLX, Praca.pl, RocketJobs, Lento.pl + підтвердження кожні 3 дні + базові шаблони резюме\n"
+            "⭐ VIP: OLX, Praca.pl, RocketJobs, Lento.pl + GoWork.pl (beta) + Infopraca.pl, без зупинок + стильні шаблони резюме\n\n"
             "💰 <b>Ціна: {price} ⭐ (≈{price_pln} zł) Telegram Stars за {days} днів VIP.</b>\n"
             "Разовий платіж, без автопродовження."
         ),
@@ -452,12 +461,12 @@ TEXTS = {
         "btn_extend_vip": "⭐ Продовжити на {days} днів — {price} ⭐ (≈{price_pln} zł)",
         "btn_vip_details": "ℹ️ Докладніше про VIP",
         "vip_invoice_title": "VIP на {days} днів",
-        "vip_invoice_desc": "5 сайтів замість 3 (+ Lento.pl та Infopraca.pl) і пошук без зупинок кожні 3 дні + стильні шаблони резюме. Термін дії — {days} днів.",
+        "vip_invoice_desc": "6 сайтів замість 4 (+ GoWork.pl та Infopraca.pl) і пошук без зупинок кожні 3 дні + стильні шаблони резюме. Термін дії — {days} днів.",
         "vip_invoice_label": "VIP {days} днів",
         "vip_thanks": (
             "🎉 <b>Оплата пройшла — VIP активовано!</b>\n\n"
             "VIP діє до <b>{until}</b>.\n"
-            "Тепер бот шукає на 5 сайтах (додалися Lento.pl та Infopraca.pl) "
+            "Тепер бот шукає на 6 сайтах (додалися GoWork.pl та Infopraca.pl) "
             "і не зупиняється кожні 3 дні. Також тобі відкрилися стильні VIP-шаблони резюме. Дякую за підтримку! ⭐"
         ),
         "vip_pay_error": "⚠️ Оплата пройшла, але під час активації VIP сталася помилка. Напиши @Hriaker1 — швидко все виправимо.",
@@ -1301,7 +1310,7 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
             if job_id is None:
                 continue
 
-            # Lento / Infopraca — только для VIP (не помечаем как отправленные: после покупки VIP они дойдут)
+            # GoWork / Infopraca — только для VIP (не помечаем как отправленные: после покупки VIP они дойдут)
             if not is_vip and job.get("source") in VIP_ONLY_SOURCES:
                 vip_only += 1
                 continue
@@ -2228,7 +2237,7 @@ async def scheduled_check():
         now = datetime.now(timezone.utc)
         active_filters = []
 
-        # VIP-пользователи: без 3-дневной паузы + получают Lento/Infopraca
+        # VIP-пользователи: без 3-дневной паузы + получают GoWork/Infopraca
         vip_ids = await asyncio.to_thread(db_get_active_vip_ids)
         vip_lookup_ok = vip_ids is not None
         if vip_ids is None:
