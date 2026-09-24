@@ -147,7 +147,9 @@ CHANNELS_MAPPING = {
     "Częstochowa": {"id": -1004372087006, "limit": 5},                     # @Praca_Czestochowa
     "Rzeszów": {"id": -1003849575739, "limit": 5},                         # @Praca_rzeszow_ua
     "Gdynia": {"id": -1004432735605, "limit": 5},                          # @Praca_w_Gdynie
-    "Poznań": {"id": -1001716517416, "limit": 3, "thread_id": 81854},    # Ветка познань
+    # Познань: редкие посты (не чаще 1 раза в 2.5 ч) + без звука (по просьбе админа)
+    "Poznań": {"id": -1001716517416, "limit": 3, "thread_id": 81854,
+               "interval_hours": 2.5, "silent": True},                    # Ветка познань
     "Bydgoszcz": {"id": -1001759834702, "limit": 5, "thread_id": 1427}    # Ветка 1445 в Быдгощ @ua_bydgoszcz
 }
 
@@ -1405,6 +1407,12 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
 
 # ==================== AUTO-POSTING TO CHANNELS ====================
 
+# Необязательные опции канала в CHANNELS_MAPPING:
+#   "interval_hours": 2.5  — постить не чаще, чем раз в N часов (по умолчанию — каждый цикл, раз в 15 мин)
+#   "silent": True         — отправлять без звука (disable_notification=True)
+# Время последнего поста хранится в памяти: после рестарта бота первый пост уйдёт сразу, дальше — по интервалу.
+_channel_last_post: dict = {}
+
 async def post_jobs_to_channels():
     """
     Фоновая задача автопостинга свежих вакансий в Telegram-каналы сателлиты.
@@ -1416,13 +1424,23 @@ async def post_jobs_to_channels():
             channel_id = config["id"]
             limit = config.get("limit", 5)
             thread_id = config.get("thread_id", None)
+            interval_h = config.get("interval_hours")
+            silent = config.get("silent", False)
+
+            # Троттлинг: канал с interval_hours пропускаем, пока не прошёл интервал с прошлого поста
+            if interval_h:
+                last = _channel_last_post.get(channel_id)
+                if last and (datetime.now(timezone.utc) - last) < timedelta(hours=interval_h) - timedelta(seconds=60):
+                    continue
 
             # Сначала ОБЯЗАТЕЛЬНО регистрируем канал в таблице users,
             # чтобы удовлетворить ограничение внешнего ключа (Foreign Key) в sent_jobs.
             await asyncio.to_thread(db_upsert_user, channel_id, f"Channel_{city}")
 
             # Забираем вакансии за последние 2 часа (СВЕЖАК!), убирая отправку старья
-            jobs = await asyncio.to_thread(db_get_jobs_for_city, city, limit=50, hours=2)
+            # Для каналов с интервалом окно свежести = интервал + 1 ч, иначе вакансии между постами потеряются
+            window_h = max(2, interval_h + 1) if interval_h else 2
+            jobs = await asyncio.to_thread(db_get_jobs_for_city, city, limit=50, hours=window_h)
             if not jobs:
                 continue
 
@@ -1452,7 +1470,11 @@ async def post_jobs_to_channels():
                 if sent_count < limit:
                     # Отправляем только до достижения лимита
                     try:
-                        await send_job_card(channel_id, job, message_thread_id=thread_id)
+                        await send_job_card(
+                            channel_id, job,
+                            message_thread_id=thread_id,
+                            disable_notification=silent,
+                        )
                         sent_job_ids_batch.append(job_id)
                         already_sent_ids.add(job_id)
                         sent_count += 1
@@ -1465,6 +1487,9 @@ async def post_jobs_to_channels():
                     skipped_job_ids_batch.append(job_id)
 
             # 3. Фиксируем и отправленные, и пропущенные вакансии в Supabase
+            if sent_count > 0:
+                _channel_last_post[channel_id] = datetime.now(timezone.utc)
+
             all_to_mark = sent_job_ids_batch + skipped_job_ids_batch
             if all_to_mark:
                 await asyncio.to_thread(db_mark_sent_batch, channel_id, all_to_mark)
