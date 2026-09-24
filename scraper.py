@@ -21,6 +21,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 CF_WORKER_URL = os.getenv("CF_WORKER_URL")  # Читаем адрес Cloudflare воркера
 SCRAPERAPI_KEY = os.getenv("SCRAPERAPI_KEY")  # Ключ ScraperAPI (сайт-посредник для Gowork), хранить только в .env
+WEBSHARE_PROXIES = os.getenv("WEBSHARE_PROXIES", "")  # Список прокси Webshare (http://user:pass@ip:port), через запятую или с новой строки. Только в .env / GitHub Secrets
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -1275,13 +1276,94 @@ def _fetch_gowork_via_scraperapi(url: str, attempts: int = 2):
     return last_status, ""
 
 
+def _load_webshare_proxies() -> list:
+    """Разбирает WEBSHARE_PROXIES (запятые / переводы строк / пробелы) в список уникальных прокси."""
+    if not WEBSHARE_PROXIES:
+        return []
+    items = re.split(r"[,\s]+", WEBSHARE_PROXIES.strip())
+    proxies = []
+    for p in items:
+        p = p.strip().strip("\"'")
+        if not p:
+            continue
+        if "://" not in p:
+            p = "http://" + p
+        if p not in proxies:
+            proxies.append(p)
+    return proxies
+
+
+def _mask_proxy(proxy: str) -> str:
+    """Для логов: прячем логин/пароль, оставляем только ip:port."""
+    return proxy.split("@")[-1] if "@" in proxy else proxy.split("://")[-1]
+
+
+def _fetch_gowork_via_proxies(url: str, attempts: int = 3):
+    """
+    Загружает страницу Gowork через случайные прокси Webshare.
+    Каждая попытка берёт новый случайный прокси (без повторов в рамках одного вызова).
+    Успех = HTTP 200 И в HTML есть 'g-job-item'. Возвращает (status, html); (0, "") если ни один прокси не сработал.
+    """
+    proxies = _load_webshare_proxies()
+    if not proxies:
+        return 0, ""
+
+    headers = {
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "accept-language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
+        "upgrade-insecure-requests": "1",
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "cross-site",
+        "sec-fetch-user": "?1",
+        "referer": "https://www.google.com/",
+    }
+
+    last_status = 0
+    # random.sample = случайный выбор, но без повторного выбора того же (возможно мёртвого) прокси
+    chosen = random.sample(proxies, min(attempts, len(proxies)))
+    for i, proxy in enumerate(chosen, start=1):
+        masked = _mask_proxy(proxy)
+        try:
+            r = cr.get(
+                url,
+                headers=headers,
+                impersonate="chrome120",
+                proxies={"http": proxy, "https": proxy},
+                timeout=30,
+            )
+            last_status = r.status_code
+            if r.status_code == 200 and r.text and "g-job-item" in r.text:
+                logger.info(f"Gowork: прокси {masked} отдал страницу (попытка {i}/{len(chosen)})")
+                return 200, r.text
+            logger.warning(
+                f"Gowork: прокси {masked} — status={r.status_code}, "
+                f"g-job-item {'есть' if r.text and 'g-job-item' in r.text else 'нет'} (попытка {i}/{len(chosen)})"
+            )
+        except Exception as e:
+            # маскируем прокси с логином/паролем, чтобы они не попали в логи
+            logger.error(f"Gowork: ошибка прокси {masked} (попытка {i}/{len(chosen)}): {str(e).replace(proxy, masked)}")
+        if i < len(chosen):
+            time.sleep(random.uniform(1.0, 2.0))
+    return last_status, ""
+
+
 def fetch_gowork_sync(url: str):
     """
-    Фетч Gowork: случайная пауза (вместе с GOWORK_SEMAPHORE(1) гарантирует один запрос за раз),
-    затем загрузка через сайт-посредник ScraperAPI. Если ключа нет или посредник не отдал страницу —
-    запасной путь через fetch_url_with_retry (curl_cffi -> Cloudflare Worker).
+    Фетч Gowork: случайная пауза 3-6 сек (вместе с GOWORK_SEMAPHORE(1) гарантирует один запрос за раз
+    и паузу между городами), затем:
+      1) до 3 попыток через случайные прокси Webshare (200 + 'g-job-item' в HTML);
+      2) фоллбек — ScraperAPI (render=true);
+      3) последний запасной путь — fetch_url_with_retry (curl_cffi -> Cloudflare Worker).
     """
-    time.sleep(random.uniform(1.5, 3.0))
+    time.sleep(random.uniform(3.0, 6.0))
+
+    if WEBSHARE_PROXIES:
+        status, html = _fetch_gowork_via_proxies(url, attempts=3)
+        if status == 200 and html:
+            return status, html
+        logger.warning("Gowork: прокси Webshare не отдали страницу, уходим на ScraperAPI")
+
     if SCRAPERAPI_KEY:
         status, html = _fetch_gowork_via_scraperapi(url)
         if status == 200 and html:
