@@ -286,7 +286,7 @@ def get_active_cities_from_db() -> list:
 # Источники, которые в боте (VIP_ONLY_SOURCES) доступны только VIP-юзерам.
 # Держим в одном месте, чтобы бот и парсер не разъехались — если поменяешь список в bot.py,
 # продублируй тут же.
-VIP_ONLY_SOURCES = {"Lento", "Infopraca", "Gowork"}
+VIP_ONLY_SOURCES = {"Infopraca", "Gowork"}  # Lento вынесен в бесплатный план
 
 
 def get_vip_cities_from_db():
@@ -296,7 +296,7 @@ def get_vip_cities_from_db():
 
     Возвращает (vip_all, vip_slugs):
       - vip_all=True  -> хотя бы один VIP ищет по всей Польше ("all"), значит
-                         VIP-сайты (Lento/Infopraca) нужно парсить во всех городах.
+                         VIP-сайты (Infopraca/Gowork) нужно парсить во всех городах.
       - vip_all=False -> vip_slugs — множество слагов городов, где есть VIP.
 
     При любой ошибке БД намеренно возвращает (True, set()) — то есть "сканим
@@ -308,7 +308,7 @@ def get_vip_cities_from_db():
         r = supabase.table("users").select("telegram_id").gt("vip_until", now_str).execute()
         vip_ids = [row["telegram_id"] for row in (r.data or []) if row.get("telegram_id")]
         if not vip_ids:
-            logger.info("👑 VIP cities: активных VIP нет — Lento/Infopraca сегодня не парсим")
+            logger.info("👑 VIP cities: активных VIP нет — Infopraca/Gowork сегодня не парсим")
             return False, set()
 
         cities = set()
@@ -332,11 +332,11 @@ def get_vip_cities_from_db():
             return False, set()
 
         if "all" in cities:
-            logger.info(f"👑 VIP cities: есть VIP с фильтром 'вся Польша' -> Lento/Infopraca везде")
+            logger.info(f"👑 VIP cities: есть VIP с фильтром 'вся Польша' -> Infopraca/Gowork везде")
             return True, set()
 
         slugs = {get_city_slug(c) for c in cities}
-        logger.info(f"👑 VIP cities: {sorted(cities)} -> Lento/Infopraca только тут")
+        logger.info(f"👑 VIP cities: {sorted(cities)} -> Infopraca/Gowork только тут")
         return False, slugs
     except Exception as e:
         logger.error(f"get_vip_cities_from_db: {e} — сканим VIP-сайты везде на всякий случай")
@@ -1474,13 +1474,13 @@ async def scrape_city_task(
             parse_praca_pl(city, existing_ids, lock),
             parse_rocketjobs(city, existing_ids, lock),
             parse_fachpraca(city, existing_ids, lock),
+            parse_lento(city, existing_ids, lock),  # бесплатный источник — парсим во всех активных городах
         ]
         if city_has_vip:
-            parse_jobs.append(parse_lento(city, existing_ids, lock))
             parse_jobs.append(parse_infopraca(city, existing_ids, lock))
             parse_jobs.append(parse_gowork(city, existing_ids, lock))
         else:
-            logger.info(f"⏭️ {city}: активных VIP нет — Lento/Infopraca/Gowork пропускаем")
+            logger.info(f"⏭️ {city}: активных VIP нет — Infopraca/Gowork пропускаем")
 
         results = await asyncio.gather(*parse_jobs)
         return sum(results)
