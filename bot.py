@@ -1428,7 +1428,9 @@ async def post_jobs_to_channels():
             limit = config.get("limit", 5)
             thread_id = config.get("thread_id", None)
             interval_h = config.get("interval_hours")
-            silent = config.get("silent", False)
+            # По умолчанию все каналы теперь тихие (без звука/вибрации).
+            # Чтобы вернуть звук для конкретного канала — добавь ему "silent": False.
+            silent = config.get("silent", True)
 
             # Тихие часы: вне окна active_hours (время Варшавы) канал не трогаем
             active_hours = config.get("active_hours")
