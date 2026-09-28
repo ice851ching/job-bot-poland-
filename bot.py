@@ -95,6 +95,22 @@ VIP_ONLY_CV_TEMPLATES = {"t4", "t5", "t6"}
 # Временный лимит-трекер резюме (в памяти: user_id -> список timestamp генераций за последние 24 часа)
 CV_LIMIT_TRACKER = {}
 
+# ==================== LEAD CAPTURE (анкета "Zostaw zgłoszenie" под вакансиями) ====================
+# Форма (lead_form.html) хостится отдельно (Netlify), открывается через Mini App ссылку
+# https://t.me/<бот>/<app_short_name>?startapp=job_<id> — это ОБЫЧНАЯ url-кнопка, а не WebAppInfo,
+# потому что inline-кнопки типа web_app работают только в личных чатах с ботом и не проходят
+# в постах в каналах-сателлитах. Ссылка на Mini App работает откуда угодно и всё равно открывает
+# форму как полноценный WebApp с подписанным initData — telegram_id получаем внутри веб-эппа.
+LEAD_APP_SHORT_NAME = os.getenv("LEAD_APP_SHORT_NAME", "")  # short_name Mini App, заданный в @BotFather (/newapp)
+LEAD_BUTTON_TEXT = "Nie pasuje? Dobierzemy inną pracę"
+LEAD_EVERY_N = 5  # кнопка анкеты только под каждой N-й вакансией в чате (1 = под каждой)
+_lead_sent_counter: dict = {}  # chat_id -> сколько карточек уже отправлено (в памяти, сбрасывается при рестарте)
+LEAD_LIMIT_PER_DAY = 3  # максимум заявок с одного telegram_id в сутки
+LEAD_STATUS_VALUES = {"pl_ue", "karta_pobytu", "wiza", "ochrona_czasowa"}  # синхронизировано с <select id="status"> в lead_form.html
+
+# Username бота, нужен для сборки ссылки на Mini App. Заполняется один раз при старте (см. main()).
+BOT_USERNAME = None
+
 
 class SetupStates(StatesGroup):
     lang = State()
@@ -151,8 +167,8 @@ CHANNELS_MAPPING = {
     # только с 09:00 до 21:00 по Варшаве, без звука
     "Poznań": {"id": -1001716517416, "limit": 8, "thread_id": 81854,
                "interval_hours": 2.5, "silent": True,
-               "active_hours": (9, 21)},                                  # Ветка познань
-    "Bydgoszcz": {"id": -1001759834702, "limit": 5, "thread_id": 1427}    # Ветка 1445 в Быдгощ @ua_bydgoszcz
+               "active_hours": (9, 21), "lead_button": False},                                  # Ветка познань
+    "Bydgoszcz": {"id": -1001759834702, "limit": 5, "thread_id": 1427, "lead_button": False}    # Ветка 1445 в Быдгощ @ua_bydgoszcz
 }
 
 UMOWY = [
@@ -956,6 +972,104 @@ def db_get_bot_stats() -> dict:
     return {"total": 0, "active": 0}
 
 
+# ==================== LEAD CAPTURE: DB HELPERS ====================
+
+def db_get_job_by_id(job_id):
+    """Подтягивает title/url вакансии по id — для контекста рекрутеру внутри заявки."""
+    for attempt in range(3):
+        try:
+            r = supabase.table("jobs").select("id,title,url,city").eq("id", job_id).limit(1).execute()
+            return r.data[0] if r and r.data else None
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(0.5)
+                continue
+            logger.error(f"db_get_job_by_id error: {e}")
+            return None
+    return None
+
+
+def db_count_leads_today(user_id: int) -> int:
+    """Считает заявки пользователя за последние 24 часа — защита от спама (лимит LEAD_LIMIT_PER_DAY)."""
+    since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    for attempt in range(3):
+        try:
+            r = (
+                supabase.table("leads")
+                .select("id", count="exact")
+                .eq("user_id", user_id)
+                .gte("created_at", since)
+                .execute()
+            )
+            if r.count is not None:
+                return r.count
+            return len(r.data) if r.data else 0
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(0.5)
+                continue
+            logger.error(f"db_count_leads_today error for {user_id}: {e}")
+            return 0
+    return 0
+
+
+def db_create_lead(record: dict):
+    """Создаёт новую заявку. Возвращает вставленную строку (с id) или None при ошибке."""
+    for attempt in range(3):
+        try:
+            r = supabase.table("leads").insert(record).execute()
+            return r.data[0] if r and r.data else None
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(0.5)
+                continue
+            logger.error(f"db_create_lead error: {e}")
+            return None
+    return None
+
+
+def db_update_lead(lead_id, user_id: int, fields: dict) -> bool:
+    """Обновляет заявку. eq(user_id) не даёт отредактировать чужую заявку по чужому id."""
+    for attempt in range(3):
+        try:
+            r = (
+                supabase.table("leads")
+                .update(fields)
+                .eq("id", lead_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+            return bool(r.data)
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(0.5)
+                continue
+            logger.error(f"db_update_lead error for lead {lead_id}: {e}")
+            return False
+    return False
+
+
+def db_delete_lead(lead_id, user_id: int) -> bool:
+    """Удаляет заявку. eq(user_id) не даёт удалить чужую заявку по чужому id."""
+    for attempt in range(3):
+        try:
+            r = (
+                supabase.table("leads")
+                .delete()
+                .eq("id", lead_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+            return bool(r.data)
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(0.5)
+                continue
+            logger.error(f"db_delete_lead error for lead {lead_id}: {e}")
+            return False
+    return False
+
+
 # ==================== GITHUB TRIGGER ====================
 
 async def trigger_scraper_for_city(city: str) -> bool:
@@ -1157,6 +1271,165 @@ async def upload_cv_handler(request: web.Request):
         return web.json_response({"error": str(e)}, status=500, headers=headers)
 
 
+def _lead_cors_headers(methods: str) -> dict:
+    return {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": methods,
+        "Access-Control-Allow-Headers": "Content-Type, X-Requested-With",
+    }
+
+
+def _resolve_lead_user_id(payload: dict):
+    """
+    Определяет telegram_id автора заявки: сначала пробуем криптографическую подпись initData
+    (надёжно, не подделать), и только если её нет — берём user_id напрямую из тела запроса.
+    """
+    init_data = payload.get("init_data") or ""
+    if init_data:
+        user_data = verify_telegram_webapp_data(init_data, BOT_TOKEN)
+        if user_data and "id" in user_data:
+            return user_data["id"]
+
+    raw_uid = payload.get("user_id")
+    if raw_uid:
+        try:
+            return int(str(raw_uid).strip())
+        except ValueError:
+            return None
+    return None
+
+
+async def lead_capture_handler(request: web.Request):
+    """
+    Принимает новую заявку с лид-формы (кнопка "Inne oferty pracy" под вакансией).
+    Проверяет подпись Telegram, обязательные поля, лимит в сутки, сохраняет в Supabase (leads)
+    и подтверждает пользователю в чате. Заявки продаются рекрутерам — это финансовая часть бота.
+    """
+    headers = _lead_cors_headers("POST, OPTIONS")
+    if request.method == "OPTIONS":
+        return web.Response(status=200, headers=headers)
+
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid_json"}, status=400, headers=headers)
+
+    user_id = _resolve_lead_user_id(payload)
+    if not user_id:
+        return web.json_response({"error": "unauthorized"}, status=401, headers=headers)
+
+    name = str(payload.get("name") or "").strip()[:150]
+    phone = str(payload.get("phone") or "").strip()[:30]
+    city = str(payload.get("city") or "").strip()[:100]
+    status = str(payload.get("status") or "").strip()
+    comment = str(payload.get("comment") or "").strip()[:500]
+    consent = bool(payload.get("consent"))
+    job_id_raw = payload.get("job_id")
+    job_id = str(job_id_raw).strip() if job_id_raw else None
+    source_url = str(payload.get("source_url") or "").strip()[:2048]
+
+    if (
+        len(name) < 2
+        or len(phone.replace(" ", "")) < 9
+        or len(city) < 2
+        or status not in LEAD_STATUS_VALUES
+        or not consent
+    ):
+        return web.json_response({"error": "invalid_fields"}, status=400, headers=headers)
+
+    try:
+        leads_today = await asyncio.to_thread(db_count_leads_today, user_id)
+        if leads_today >= LEAD_LIMIT_PER_DAY:
+            return web.json_response({"error": "limit_exceeded"}, status=429, headers=headers)
+
+        job_title, job_url_from_db = None, None
+        if job_id:
+            job = await asyncio.to_thread(db_get_job_by_id, job_id)
+            if job:
+                job_title = job.get("title")
+                job_url_from_db = job.get("url")
+
+        record = {
+            "user_id": user_id,
+            "name": name,
+            "phone": phone,
+            "city": city,
+            "status": status,
+            "comment": comment,
+            "job_id": job_id,
+            "job_title": job_title,
+            "source_url": source_url or job_url_from_db,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        created = await asyncio.to_thread(db_create_lead, record)
+        if not created:
+            return web.json_response({"error": "db_error"}, status=500, headers=headers)
+
+        try:
+            lang = await asyncio.to_thread(get_user_lang, user_id)
+            confirm_text = {
+                "ru": "✅ <b>Заявка отправлена!</b>\nРекрутер свяжется с тобой по телефону в ближайшее время.",
+                "pl": "✅ <b>Zgłoszenie wysłane!</b>\nRekruter skontaktuje się z Tobą telefonicznie.",
+                "ua": "✅ <b>Заявку надіслано!</b>\nРекрутер зв'яжеться з тобою телефоном найближчим часом.",
+            }.get(lang, "✅ <b>Zgłoszenie wysłane!</b>")
+            await bot.send_message(user_id, confirm_text, parse_mode="HTML")
+        except Exception:
+            pass  # подтверждение — не критично, заявка уже сохранена
+
+        return web.json_response({"success": True, "lead_id": created.get("id")}, headers=headers)
+
+    except Exception as e:
+        logger.error(f"Error in lead_capture_handler: {e}")
+        return web.json_response({"error": str(e)}, status=500, headers=headers)
+
+
+async def lead_capture_item_handler(request: web.Request):
+    """Редактирование (PATCH) и удаление (DELETE) уже отправленной заявки — вызывается со страниц Edit/Delete формы."""
+    headers = _lead_cors_headers("PATCH, DELETE, OPTIONS")
+    if request.method == "OPTIONS":
+        return web.Response(status=200, headers=headers)
+
+    lead_id = request.match_info.get("lead_id")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    user_id = _resolve_lead_user_id(payload)
+    if not user_id:
+        return web.json_response({"error": "unauthorized"}, status=401, headers=headers)
+
+    try:
+        if request.method == "DELETE":
+            ok = await asyncio.to_thread(db_delete_lead, lead_id, user_id)
+            if not ok:
+                return web.json_response({"error": "not_found"}, status=404, headers=headers)
+            return web.json_response({"success": True}, headers=headers)
+
+        # PATCH
+        fields = {}
+        for key in ("name", "phone", "city", "status", "comment"):
+            if key in payload:
+                fields[key] = str(payload[key]).strip()[:500]
+
+        if "status" in fields and fields["status"] not in LEAD_STATUS_VALUES:
+            return web.json_response({"error": "invalid_fields"}, status=400, headers=headers)
+        if not fields:
+            return web.json_response({"error": "nothing_to_update"}, status=400, headers=headers)
+
+        fields["updated_at"] = datetime.now(timezone.utc).isoformat()
+        ok = await asyncio.to_thread(db_update_lead, lead_id, user_id, fields)
+        if not ok:
+            return web.json_response({"error": "not_found"}, status=404, headers=headers)
+        return web.json_response({"success": True, "lead_id": lead_id}, headers=headers)
+
+    except Exception as e:
+        logger.error(f"Error in lead_capture_item_handler: {e}")
+        return web.json_response({"error": str(e)}, status=500, headers=headers)
+
+
 async def start_web_server():
     app = web.Application(client_max_size=1024**2 * 50)
     app.router.add_get("/", health_check)
@@ -1166,6 +1439,11 @@ async def start_web_server():
     app.router.add_options("/api/upload_cv", upload_cv_handler)
     app.router.add_get("/api/vip_status", vip_status_handler)
     app.router.add_options("/api/vip_status", vip_status_handler)
+    app.router.add_post("/api/lead_capture", lead_capture_handler)
+    app.router.add_options("/api/lead_capture", lead_capture_handler)
+    app.router.add_patch("/api/lead_capture/{lead_id}", lead_capture_item_handler)
+    app.router.add_delete("/api/lead_capture/{lead_id}", lead_capture_item_handler)
+    app.router.add_options("/api/lead_capture/{lead_id}", lead_capture_item_handler)
     
     runner = web.AppRunner(app)
     await runner.setup()
@@ -1195,18 +1473,42 @@ def is_valid_job_url(url) -> bool:
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
 
-def get_job_keyboard(job_url, button_text: str = JOB_BUTTON_TEXT):
+def build_lead_app_url(job_id):
     """
-    Собирает inline-клавиатуру с одной кнопкой-ссылкой.
-    Возвращает None, если ссылка пустая/битая — тогда сообщение уходит просто без кнопки.
-    Универсальный билдер: можно использовать и для одиночных вакансий, и для дайджестов.
+    Собирает обычную https-ссылку на Mini App лид-формы: https://t.me/<бот>/<app>?startapp=job_<id>.
+    ВАЖНО: это url-кнопка, а не WebAppInfo — так она открывается и из постов в каналах-сателлитах.
+    Telegram сам подставит подписанный initData того, кто нажал, а start_param (job_<id>)
+    прилетит в tg.initDataUnsafe.start_param внутри формы.
+    Возвращает None, если бот не резолвнул свой username или не задан LEAD_APP_SHORT_NAME —
+    тогда кнопка просто не добавляется (сообщение уйдёт с одной кнопкой на вакансию, как раньше).
     """
-    if not is_valid_job_url(job_url):
+    if not BOT_USERNAME or not LEAD_APP_SHORT_NAME:
         return None
-    safe_url = job_url.strip().replace(" ", "%20")
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=button_text, url=safe_url)
-    ]])
+    payload = re.sub(r"[^A-Za-z0-9_-]", "", f"job_{job_id}" if job_id is not None else "lead")[:64]
+    return f"https://t.me/{BOT_USERNAME}/{LEAD_APP_SHORT_NAME}?startapp={payload}"
+
+
+def get_job_keyboard(job_url, job_id=None, with_lead: bool = False, button_text: str = JOB_BUTTON_TEXT):
+    """
+    Собирает inline-клавиатуру вакансии:
+      1) кнопка-ссылка на саму вакансию (как раньше),
+      2) кнопка-ссылка на лид-форму (Mini App), если она сконфигурирована.
+    Возвращает None, только если обе кнопки недоступны — тогда сообщение уходит без клавиатуры.
+    Универсальный билдер: используется и для одиночных вакансий, и для дайджестов/каналов.
+    """
+    rows = []
+
+    if is_valid_job_url(job_url):
+        safe_url = job_url.strip().replace(" ", "%20")
+        rows.append([InlineKeyboardButton(text=button_text, url=safe_url)])
+
+    lead_url = build_lead_app_url(job_id) if with_lead else None
+    if lead_url:
+        rows.append([InlineKeyboardButton(text=LEAD_BUTTON_TEXT, url=lead_url)])
+
+    if not rows:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def format_job(job):
@@ -1248,7 +1550,12 @@ def format_job(job):
     return message.strip()
 
 
-async def send_job_card(chat_id, job, **kwargs):
+def _lead_due(chat_id) -> bool:
+    """True, если следующая карточка в этом чате должна получить кнопку анкеты (каждая LEAD_EVERY_N-я)."""
+    return (_lead_sent_counter.get(chat_id, 0) + 1) % LEAD_EVERY_N == 0
+
+
+async def send_job_card(chat_id, job, lead_allowed: bool = True, **kwargs):
     """
     Отправляет карточку вакансии с кнопкой-ссылкой.
     Если ссылка битая/отсутствует — шлёт без кнопки.
@@ -1256,29 +1563,37 @@ async def send_job_card(chat_id, job, **kwargs):
     Остальные ошибки (RetryAfter, Forbidden и т.д.) пробрасываются наверх как раньше.
     """
     url = job.get("url")
-    kb = get_job_keyboard(url)
+    show_lead = lead_allowed and _lead_due(chat_id)
+    kb = get_job_keyboard(url, job.get("id"), with_lead=show_lead)
     if kb is None:
         logger.warning(f"Job {job.get('id')}: invalid or missing url ({url!r}), sending without button")
 
     try:
-        return await bot.send_message(
-            chat_id,
-            format_job(job),
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-            reply_markup=kb,
-            **kwargs,
-        )
-    except TelegramBadRequest as e:
-        if kb is not None and "BUTTON_URL_INVALID" in str(e).upper():
-            logger.warning(f"Job {job.get('id')}: Telegram rejected button url {url!r}, resending without button")
-            return await bot.send_message(
+        try:
+            result = await bot.send_message(
                 chat_id,
                 format_job(job),
                 parse_mode="HTML",
                 disable_web_page_preview=True,
+                reply_markup=kb,
                 **kwargs,
             )
+        except TelegramBadRequest as e:
+            if kb is not None and "BUTTON_URL_INVALID" in str(e).upper():
+                logger.warning(f"Job {job.get('id')}: Telegram rejected button url {url!r}, resending without button")
+                result = await bot.send_message(
+                    chat_id,
+                    format_job(job),
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                    **kwargs,
+                )
+            else:
+                raise
+        if lead_allowed:
+            _lead_sent_counter[chat_id] = _lead_sent_counter.get(chat_id, 0) + 1
+        return result
+    except TelegramBadRequest:
         raise
 
 
@@ -1484,6 +1799,7 @@ async def post_jobs_to_channels():
                     try:
                         await send_job_card(
                             channel_id, job,
+                            lead_allowed=config.get("lead_button", True),
                             message_thread_id=thread_id,
                             disable_notification=silent,
                         )
@@ -2521,6 +2837,15 @@ async def db_cleanup_database():
 
 async def main():
     logger.info("🚀 Bot starting...")
+
+    global BOT_USERNAME
+    try:
+        me = await bot.get_me()
+        BOT_USERNAME = me.username
+        logger.info(f"🤖 Bot username resolved: @{BOT_USERNAME}")
+    except Exception as e:
+        logger.warning(f"Failed to resolve bot username (lead-form button will be skipped): {e}")
+
     await start_web_server()
 
     try:
