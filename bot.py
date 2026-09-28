@@ -1565,6 +1565,11 @@ async def send_job_card(chat_id, job, lead_allowed: bool = True, **kwargs):
     url = job.get("url")
     show_lead = lead_allowed and _lead_due(chat_id)
     kb = get_job_keyboard(url, job.get("id"), with_lead=show_lead)
+    if show_lead:
+        if build_lead_app_url(job.get("id")):
+            logger.info(f"📝 Lead button added for chat {chat_id}, job {job.get('id')}")
+        else:
+            logger.warning(f"📝 Lead button due for chat {chat_id} but NOT built: username={BOT_USERNAME!r}, app={LEAD_APP_SHORT_NAME!r}")
     if kb is None:
         logger.warning(f"Job {job.get('id')}: invalid or missing url ({url!r}), sending without button")
 
@@ -2845,6 +2850,10 @@ async def main():
         logger.info(f"🤖 Bot username resolved: @{BOT_USERNAME}")
     except Exception as e:
         logger.warning(f"Failed to resolve bot username (lead-form button will be skipped): {e}")
+    logger.info(
+        f"📝 Lead button config: username={BOT_USERNAME!r}, app={LEAD_APP_SHORT_NAME!r}, "
+        f"every={LEAD_EVERY_N}, test_url={build_lead_app_url(1)}"
+    )
 
     await start_web_server()
 
