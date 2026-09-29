@@ -163,6 +163,8 @@ CHANNELS_MAPPING = {
     "Częstochowa": {"id": -1004372087006, "limit": 5},                     # @Praca_Czestochowa
     "Rzeszów": {"id": -1003849575739, "limit": 5},                         # @Praca_rzeszow_ua
     "Gdynia": {"id": -1004432735605, "limit": 5},                          # @Praca_w_Gdynie
+    "Kraków": {"id": -1003956905015, "limit": 5},                          # @PracaKrakow
+    "Szczecin": {"id": -1003953428416, "limit": 5},                        # @Praca_Szczecin
     # Познань (по просьбе админа): до 8 вакансий за пост, не чаще раза в 2.5 ч,
     # только с 09:00 до 21:00 по Варшаве, без звука
     "Poznań": {"id": -1001716517416, "limit": 8, "thread_id": 81854,
