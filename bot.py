@@ -162,7 +162,7 @@ CHANNELS_MAPPING = {
     "Radom": {"id": -1003797919409, "limit": 5},                           # @Praca_Radom
     "Częstochowa": {"id": -1004372087006, "limit": 5},                     # @Praca_Czestochowa
     "Rzeszów": {"id": -1003849575739, "limit": 5},                         # @Praca_rzeszow_ua
-    "Gdynia": {"id": -1004432735605, "limit": 5},                          # @Praca_w_Gdynie
+    "Gdańsk": {"id": -1004432735605, "limit": 5},                          # @Rabota_Gdansk_ua
     "Kraków": {"id": -1003956905015, "limit": 5},                          # @PracaKrakow
     "Szczecin": {"id": -1003953428416, "limit": 5},                        # @Praca_Szczecin
     # Познань (по просьбе админа): до 8 вакансий за пост, не чаще раза в 2.5 ч,
