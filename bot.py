@@ -157,15 +157,15 @@ CITY_SLUGS = {
 
 # ==================== КАРТА КАНАЛОВ ДЛЯ АВТОПОСТИНГА ====================
 CHANNELS_MAPPING = {
-    "Lublin": {"id": -1004402210524, "limit": 5},                          # @Praca_Lublin
-    "Białystok": {"id": -1004359303051, "limit": 5},                       # @Praca_Belostok
-    "Radom": {"id": -1003797919409, "limit": 5},                           # @Praca_Radom
-    "Częstochowa": {"id": -1004372087006, "limit": 5},                     # @Praca_Czestochowa
-    "Rzeszów": {"id": -1003849575739, "limit": 5},                         # @Praca_rzeszow_ua
-    "Gdańsk": {"id": -1004432735605, "limit": 5},                          # @Rabota_Gdansk_ua
-    "Kraków": {"id": -1003956905015, "limit": 5},                          # @PracaKrakow
-    "Szczecin": {"id": -1003953428416, "limit": 5},                        # @Praca_Szczecin
-    "Gliwice": {"id": -1003332626026, "limit": 5},                        # @rabota_gliwice
+    "Lublin": {"id": -1004402210524, "limit": 7},                          # @Praca_Lublin
+    "Białystok": {"id": -1004359303051, "limit": 7},                       # @Praca_Belostok
+    "Radom": {"id": -1003797919409, "limit": 7},                           # @Praca_Radom
+    "Częstochowa": {"id": -1004372087006, "limit": 7},                     # @Praca_Czestochowa
+    "Rzeszów": {"id": -1003849575739, "limit": 7},                         # @Praca_rzeszow_ua
+    "Gdańsk": {"id": -1004432735605, "limit": 9},                          # @Rabota_Gdansk_ua
+    "Kraków": {"id": -1003956905015, "limit": 9},                          # @PracaKrakow
+    "Szczecin": {"id": -1003953428416, "limit": 7},                        # @Praca_Szczecin
+    "Gliwice": {"id": -1003332626026, "limit": 7},                        # @rabota_gliwice
     # Познань (по просьбе админа): до 8 вакансий за пост, не чаще раза в 2.5 ч,
     # только с 09:00 до 21:00 по Варшаве, без звука
     "Poznań": {"id": -1001716517416, "limit": 8, "thread_id": 81854,
