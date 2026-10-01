@@ -616,33 +616,106 @@ def rj_ids(link: str, card, title: str, job_city: str):
     return ext_id, bridge
 
 
+# Фильтры зашиты в ссылку: stacjonarnie, UoP + zlecenie, любой wymiar. Меняется только город.
+# sortBy=newest — если сайт его не поддерживает, параметр просто игнорируется; можно убрать.
+RJ_FILTERS = (
+    "radius=0&typ-umowy=umowa-zlecenie,umowa-o-prace"
+    "&tryb-wspolpracy=stacjonarnie&wymiar-godzin=niepelny-wymiar,pelny-wymiar&sortBy=newest"
+)
+RJ_MAX_PAGES = 10  # ~50 офферов на странице
+
+_RJ_CURRENCY = re.compile(r"^(PLN|EUR|USD|GBP|CHF)\s*/", re.I)
+_RJ_WYMIAR = {"Pełny wymiar", "Niepełny wymiar", "Praktyka / Staż", "Freelance", "Kontrakt B2B"}
+
+
+def rj_build_url(slug: str, page: int) -> str:
+    url = f"https://rocketjobs.pl/oferty-pracy/{slug}?{RJ_FILTERS}"
+    if page > 1:
+        url += f"&strona={page}"
+    return url
+
+
+def rj_salary(card):
+    """Зарплата: <span>сумма</span><span>PLN/mies.</span>. Дробные суммы (31,40) и nbsp учтены."""
+    for span in card.find_all("span"):
+        cur = span.get_text(strip=True)
+        if _RJ_CURRENCY.match(cur):
+            prev = span.find_previous_sibling("span")
+            amount = prev.get_text(" ", strip=True) if prev else ""
+            amount = re.sub(r"\s+", " ", amount.replace("\xa0", " ")).strip()
+            if amount and re.search(r"\d", amount):
+                return f"{amount} {cur}"
+    # запасной вариант по тексту карточки
+    txt = card.get_text(" ", strip=True).replace("\xa0", " ")
+    if "nieujawnione" in txt.lower():
+        return None
+    m = re.search(
+        r"(\d[\d\s]*(?:[.,]\d+)?(?:\s*[-–]\s*\d[\d\s]*(?:[.,]\d+)?)?\s*(?:PLN|zł|EUR)(?:/[a-zA-Z.]+)*)",
+        txt, re.I,
+    )
+    return strip_html(m.group(0)) if m else None
+
+
+def rj_chips(card):
+    """(тип договора, wymiar) из строки чипов: [уровень, уровень, договор, договор-кратко, wymiar, wymiar]."""
+    spans = [s.get_text(" ", strip=True).replace("\xa0", " ") for s in card.find_all("span")]
+    spans = [s for s in spans if s]
+    for i, t in enumerate(spans):
+        if t in _RJ_WYMIAR:
+            return (spans[i - 2] if i >= 2 else None), t
+    return None, None
+
+
+def rj_location(card, default_city: str):
+    """(город, несколько_локаций). У мульти-локаций текст вида 'Toruń , +2 Lokalizacje'."""
+    pin = card.select_one("svg.lucide-map-pin")
+    if not pin:
+        return default_city, False
+    node, hops = pin.parent, 0
+    while node is not None and hops < 5:
+        txt = strip_html(node.get_text(" ", strip=True))
+        if txt:
+            multi = bool(re.search(r",\s*\+\d+", txt))
+            first = txt.split(",")[0].strip()
+            return (first or default_city), multi
+        node = node.parent
+        hops += 1
+    return default_city, False
+
+
 async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
     try:
         slug = get_city_slug(city)
         if not slug:
             return 0
 
-        categories = ["support", "gastronomia", "praca-w-sklepie"]
         jobs_to_save = []
         total_found = 0
         already_in_db = 0
         dupes_in_run = 0
         parse_errors = 0
         seen_this_run = set()
+        seen_links = set()
 
-        for category in categories:
+        for page in range(1, RJ_MAX_PAGES + 1):
             await asyncio.sleep(random.uniform(1.5, 3.5))
-            
-            url = f"https://rocketjobs.pl/oferty-pracy/{slug}/{category}?radius=0&sortBy=newest"
+
+            url = rj_build_url(slug, page)
             status, html = await asyncio.to_thread(fetch_url_with_retry, url, "https://www.google.com/")
-            
             if status != 200 or not html:
-                continue
+                logger.warning(f"RocketJobs {city} p{page}: status={status}")
+                break
 
             soup = BeautifulSoup(html, "html.parser")
-            
-            # Находим карточки по стабильному семантическому классу a.offer-card
             offer_links = soup.select("a.offer-card")
+            if not offer_links:
+                break
+
+            # страница вне диапазона может отдать ту же выдачу — выходим, если нового нет
+            page_links = {a.get("href", "").split("?")[0] for a in offer_links}
+            if page > 1 and page_links <= seen_links:
+                break
+            seen_links |= page_links
             total_found += len(offer_links)
 
             for a in offer_links:
@@ -652,13 +725,11 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                         card = a.find_parent(["li", "article", "div"]) or a
 
                     title = a.get("title", "").replace("Zobacz ofertę", "").strip()
-
                     title_el = card.select_one("a.offer_list_offer_title_link") or card.select_one("h3 a") or card.find("h3")
                     if title_el:
                         inner_title = strip_html(title_el.get_text(strip=True))
                         if inner_title:
                             title = inner_title
-
                     if not title or len(title) < 3:
                         parse_errors += 1
                         continue
@@ -673,23 +744,18 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                         link = "https://rocketjobs.pl" + link
                     link = link.split("?")[0].split("#")[0]
 
-                    job_city = city
-                    pin_icon = card.select_one("svg.lucide-map-pin")
-                    if pin_icon:
-                        container = pin_icon.parent
-                        hops = 0
-                        while container is not None and hops < 5:
-                            loc_text = strip_html(container.get_text(" ", strip=True))
-                            if loc_text:
-                                job_city = loc_text.split(",")[0].split()[0].replace(",", "").strip() or city
-                                break
-                            container = container.parent
-                            hops += 1
-
-                    if not city_matches(job_city, city):
+                    job_city, multi = rj_location(card, city)
+                    if multi:
+                        # у оффера несколько локаций; выдача уже отфильтрована по городу (radius=0)
+                        job_city = city
+                    elif not city_matches(job_city, city):
                         continue
 
                     ext_id, bridge_ids = rj_ids(link, card, title, job_city)
+                    # старая версия парсера брала только первое слово города («Zielona» вместо «Zielona Góra»)
+                    legacy_city = city.split()[0]
+                    if rj_norm(legacy_city) != rj_norm(job_city):
+                        bridge_ids.add(rj_ids(link, card, title, legacy_city)[0])
 
                     if ext_id in seen_this_run:
                         dupes_in_run += 1
@@ -702,12 +768,21 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                             continue
                         existing_ids.add(ext_id)
 
+                    salary = rj_salary(card)
+                    contract_txt, wymiar = rj_chips(card)
                     card_full_text = card.get_text(" ", strip=True)
-                    salary = None
-                    if "nieujawnione" not in card_full_text.lower():
-                        sal_match = re.search(r"(\d[\d\s]*(?:\s*[-–]\s*\d[\d\s]*)?\s*(?:PLN|zł|EUR)(?:/[a-zA-Zа-яА-Я]+)*)", card_full_text, re.IGNORECASE)
-                        if sal_match:
-                            salary = strip_html(sal_match.group(0))
+
+                    if contract_txt is not None:
+                        umowa = normalize_umowa(contract_txt) or normalize_umowa(title)
+                    else:
+                        umowa = normalize_umowa(card_full_text) or normalize_umowa(title)
+
+                    if wymiar == "Niepełny wymiar":
+                        etat = "part"
+                    elif wymiar == "Pełny wymiar":
+                        etat = "full"
+                    else:
+                        etat = normalize_etat(card_full_text, salary) or normalize_etat(title, salary)
 
                     jobs_to_save.append({
                         "external_id": ext_id,
@@ -716,8 +791,8 @@ async def parse_rocketjobs(city: str, existing_ids: set, lock: asyncio.Lock) -> 
                         "salary": salary,
                         "url": link,
                         "source": "RocketJobs",
-                        "umowa": normalize_umowa(card_full_text) or normalize_umowa(title),
-                        "etat": normalize_etat(card_full_text, salary) or normalize_etat(title, salary)
+                        "umowa": umowa,
+                        "etat": etat,
                     })
                 except Exception as e:
                     parse_errors += 1
