@@ -455,8 +455,9 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
             return 0
 
         soup = BeautifulSoup(html, "html.parser")
-        cards = soup.select("li.listing__item")
-        
+        # Praca.pl перешла на разметку listing-v2__*; старую оставляем как запасной вариант
+        cards = soup.select("li.listing-v2__item") or soup.select("li.listing__item")
+
         logger.info(f"🔍 Praca.pl DEBUG: status={status}, cards_found={len(cards)} on page for {city}")
 
         if not cards:
@@ -466,14 +467,20 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
         jobs_to_save = []
         ignored_duplicate = 0
         ignored_city = 0
+        ignored_reloc = 0
 
         for card in cards[:40]:
             try:
-                title_el = card.select_one("a.listing__title")
+                title_el = card.select_one("a.listing-v2__title") or card.select_one("a.listing__title")
                 if not title_el:
                     continue
                 title = strip_html(title_el.get_text(strip=True))
                 if not title or len(title) < 3:
+                    continue
+
+                # Офферы с релокацией за границу (Niemcy, Holandia...) — это не работа в городе поиска
+                if card.select_one(".listing-v2__relocation, p.listing-v2__additional"):
+                    ignored_reloc += 1
                     continue
 
                 link = title_el.get("href", "").split("#")[0]
@@ -489,8 +496,10 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
                     existing_ids.add(ext_id)
 
                 job_city = city
-                loc_el = card.select_one("span.listing__location-name")
+                loc_el = card.select_one("span.listing-v2__location") or card.select_one("span.listing__location-name")
                 if loc_el:
+                    for hint in loc_el.select(".listing-v2__hint"):
+                        hint.decompose()
                     loc_text = strip_html(loc_el.get_text(" ", strip=True))
                     if loc_text:
                         job_city = loc_text.split()[0].replace(",", "").strip()
@@ -499,25 +508,38 @@ async def parse_praca_pl(city: str, existing_ids: set, lock: asyncio.Lock) -> in
                     ignored_city += 1
                     continue
 
-                dt_el = card.select_one("div.listing__main-details")
-                dt = strip_html(dt_el.get_text(" ", strip=True)).lower() if dt_el else ""
+                # Теги: umowa / etat / уровень лежат в tag--neutral, зарплата — в tag--salary
+                tag_texts = [
+                    t.get_text(" ", strip=True)
+                    for t in card.select("li.listing-v2__tag--neutral .listing-v2__tag-text")
+                ]
+                dt = " ".join(tag_texts).lower()
+                if not dt:  # запасной вариант для старой разметки
+                    dt_el = card.select_one("div.listing__main-details")
+                    dt = strip_html(dt_el.get_text(" ", strip=True)).lower() if dt_el else ""
+
+                salary = None
+                sal_el = card.select_one("li.listing-v2__tag--salary .listing-v2__tag-text")
+                if sal_el:
+                    salary = re.sub(r"\s+", " ", sal_el.get_text(" ", strip=True).replace("\xa0", " ")).strip() or None
 
                 jobs_to_save.append({
                     "external_id": ext_id,
                     "title": title,
                     "city": job_city,
-                    "salary": None,
+                    "salary": salary,
                     "url": link,
                     "source": "Praca.pl",
                     "umowa": normalize_umowa(dt) or normalize_umowa(title),
-                    "etat": normalize_etat(dt) or normalize_etat(title)
+                    "etat": normalize_etat(dt, salary) or normalize_etat(title, salary)
                 })
             except Exception as e:
                 logger.debug(f"Praca.pl card error: {e}")
 
         saved = await db_insert_jobs_batch(jobs_to_save)
         logger.info(
-            f"Praca.pl saved={saved} (duplicates={ignored_duplicate}, city_mismatch={ignored_city}) city={city}"
+            f"Praca.pl saved={saved} (cards={len(cards)}, duplicates={ignored_duplicate}, "
+            f"city_mismatch={ignored_city}, reloc={ignored_reloc}) city={city}"
         )
         return saved
     except Exception as e:
