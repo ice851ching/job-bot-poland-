@@ -115,7 +115,6 @@ BOT_USERNAME = None
 class SetupStates(StatesGroup):
     lang = State()
     city = State()
-    city_custom = State()
     etat = State()
     umowa = State()
 
@@ -126,14 +125,25 @@ class AdminStates(StatesGroup):
     confirm_ad = State()
 
 
+# Фиксированный список городов (порядок = по количеству украинцев). Свой город вписать нельзя —
+# в БД и в запросы к сайтам попадают только значения из этого whitelist.
+# (отображаемое название, ASCII-ключ для callback_data)
 CITIES = [
-    ("Warszawa", "Warszawa"), ("Kraków", "Kraków"),
-    ("Wrocław", "Wrocław"), ("Poznań", "Poznań"),
-    ("Gdańsk", "Gdańsk"), ("Łódź", "Łódź"),
-    ("Katowice", "Katowice"), ("Lublin", "Lublin"),
-    ("Toruń", "Toruń"), ("Szczecin", "Szczecin"),
-    ("Bydgoszcz", "Bydgoszcz"), ("Gdynia", "Gdynia"),
+    ("Warszawa", "warszawa"), ("Wrocław", "wroclaw"),
+    ("Kraków", "krakow"), ("Poznań", "poznan"),
+    ("Gdańsk", "gdansk"), ("Łódź", "lodz"),
+    ("Szczecin", "szczecin"), ("Katowice", "katowice"),
+    ("Gdynia", "gdynia"), ("Bydgoszcz", "bydgoszcz"),
+    ("Lublin", "lublin"), ("Rzeszów", "rzeszow"),
+    ("Gorzów Wielkopolski", "gorzow"), ("Białystok", "bialystok"),
+    ("Zielona Góra", "zielona-gora"), ("Toruń", "torun"),
+    ("Częstochowa", "czestochowa"), ("Opole", "opole"),
+    ("Gliwice", "gliwice"), ("Sosnowiec", "sosnowiec"),
+    ("Radom", "radom"), ("Kielce", "kielce"),
+    ("Bielsko-Biała", "bielsko-biala"), ("Olsztyn", "olsztyn"),
+    ("Legnica", "legnica"), ("Rybnik", "rybnik"),
 ]
+CITY_BY_KEY = {key: name for name, key in CITIES}
 
 CITY_SLUGS = {
     "warszawa": "warszawa", "kraków": "krakow", "krakow": "krakow",
@@ -153,6 +163,10 @@ CITY_SLUGS = {
     "zabrze": "zabrze", "olsztyn": "olsztyn", "opole": "opole",
     "zielona góra": "zielona-gora", "zielona gora": "zielona-gora",
     "radom": "radom",
+    "gorzów wielkopolski": "gorzow-wielkopolski", "gorzow wielkopolski": "gorzow-wielkopolski",
+    "gorzów": "gorzow-wielkopolski", "gorzow": "gorzow-wielkopolski",
+    "bielsko-biała": "bielsko-biala", "bielsko-biala": "bielsko-biala",
+    "legnica": "legnica", "rybnik": "rybnik",
 }
 
 # ==================== КАРТА КАНАЛОВ ДЛЯ АВТОПОСТИНГА ====================
@@ -205,7 +219,6 @@ TEXTS = {
             "Выбери язык:"
         ),
         "choose_city": "🏙 Выбери город:",
-        "enter_city": "✏️ Напиши название города на польском (например: Szczecin):",
         "choose_etat": "⏰ Выбери тип занятости (можно несколько):\n\nНажми нужные, потом ✅ Готово",
         "choose_umowa": "📋 Выбери тип договора:",
         "saved": (
@@ -244,7 +257,6 @@ TEXTS = {
         ),
         "already_stopped": "ℹ️ Ты не подписан на вакансии. Нажми кнопку ниже чтобы начать.",
         "btn_all": "🇵🇱 Вся Польша",
-        "btn_custom": "✏️ Свой город",
         "btn_done": "✅ Готово",
         "after_initial": (
             "👆 Это были последние актуальные вакансии за сегодня.\n\n"
@@ -314,7 +326,6 @@ TEXTS = {
             "Wybierz język:"
         ),
         "choose_city": "🏙 Wybierz miasto:",
-        "enter_city": "✏️ Wpisz miasto (np. Szczecin):",
         "choose_etat": "⏰ Wybierz etat (można kilka):\n\nPotem ✅ Gotowe",
         "choose_umowa": "📋 Wybierz umowę:",
         "saved": (
@@ -345,7 +356,6 @@ TEXTS = {
         ),
         "already_stopped": "ℹ️ Nie masz subskrypcji. Naciśnij przycisk poniżej.",
         "btn_all": "🇵🇱 Cała Polska",
-        "btn_custom": "✏️ Inne miasto",
         "btn_done": "✅ Gotowe",
         "after_initial": (
             "👆 To były ostatnie aktualne oferty z dzisiaj.\n\n"
@@ -414,7 +424,6 @@ TEXTS = {
             "Обери мову:"
         ),
         "choose_city": "🏙 Обери місто:",
-        "enter_city": "✏️ Напиши місто польською (наприклад: Szczecin):",
         "choose_etat": "⏰ Обери зайнятість (можна кілька):\n\nПотім ✅ Готово",
         "choose_umowa": "📋 Обери договір:",
         "saved": (
@@ -445,7 +454,6 @@ TEXTS = {
         ),
         "already_stopped": "ℹ️ Ти не підписаний. Натисни кнопку нижче.",
         "btn_all": "🇵🇱 Вся Польша",
-        "btn_custom": "✏️ Своє місто",
         "btn_done": "✅ Готово",
         "after_initial": (
             "👆 Це були останні актуальні вакансії за сьогодні.\n\n"
@@ -1514,6 +1522,28 @@ def get_job_keyboard(job_url, job_id=None, with_lead: bool = False, button_text:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+# Хэштеги источников. Порядок важен: "infopraca" проверяем раньше "praca".
+# Сравнение по "contains" нормализованного названия — работает и для "Praca.pl",
+# и для старых значений, где вместо названия была ссылка (https://www.praca.pl/...).
+SOURCE_HASHTAGS = [
+    ("infopraca", "#Infopraca"),
+    ("gowork", "#GoWork"),
+    ("rocketjobs", "#RocketJobs"),
+    ("lento", "#Lento"),
+    ("olx", "#OLX"),
+    ("praca", "#PracaPL"),
+]
+
+def source_hashtag(source) -> str:
+    key = re.sub(r"[^a-z0-9]", "", str(source or "").lower())
+    if not key:
+        return ""
+    for needle, tag in SOURCE_HASHTAGS:
+        if needle in key:
+            return tag
+    return ""
+
+
 def format_job(job):
     """
     Карточка вакансии: заголовок сверху, все подробности внутри цитаты blockquote.
@@ -1540,7 +1570,9 @@ def format_job(job):
     if job.get("salary"):
         details.append(f"💰 {clean(job['salary'])}")
 
-    details.append(f"📌 {clean(job.get('source')) or '—'}")
+    tag = source_hashtag(job.get("source"))
+    if tag:
+        details.append(tag)
 
     quote_content = "\n".join(details)
 
@@ -1847,15 +1879,14 @@ def kb_lang():
 
 def kb_cities(lang):
     rows, row = [], []
-    for name, val in CITIES:
-        row.append(InlineKeyboardButton(text=name, callback_data=f"c_{val}"))
+    for name, key in CITIES:
+        row.append(InlineKeyboardButton(text=name, callback_data=f"c_{key}"))
         if len(row) == 2:
             rows.append(row)
             row = []
     if row:
         rows.append(row)
     rows.append([InlineKeyboardButton(text=t(lang, "btn_all"), callback_data="c_all")])
-    rows.append([InlineKeyboardButton(text=t(lang, "btn_custom"), callback_data="c_custom")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -2475,34 +2506,22 @@ async def on_city(c: CallbackQuery, state: FSMContext):
     try:
         data = await state.get_data()
         lang = data.get("lang", "ru")
-        val = c.data[2:]
-        if val == "custom":
-            await state.set_state(SetupStates.city_custom)
-            await c.message.edit_text(t(lang, "enter_city"))
+        key = c.data[2:]
+        if key == "all":
+            city, cd = "all", t(lang, "btn_all")
+        elif key in CITY_BY_KEY:
+            city = cd = CITY_BY_KEY[key]
+        else:
+            # callback_data можно подделать — всё, чего нет в списке, игнорируем
             await c.answer()
             return
-        cd = t(lang, "btn_all") if val == "all" else val
-        await state.update_data(city=val, city_display=cd)
+        await state.update_data(city=city, city_display=cd)
         await state.set_state(SetupStates.etat)
         sel = data.get("etat", {"full": False, "part": False})
         await c.message.edit_text(t(lang, "choose_etat"), reply_markup=kb_etat(lang, sel))
         await c.answer()
     except Exception as e:
         logger.warning(f"on_city error: {e}")
-
-
-@router.message(SetupStates.city_custom, ~F.text.in_(ALL_MENU_BTNS))
-async def on_city_custom(m: Message, state: FSMContext):
-    try:
-        data = await state.get_data()
-        lang = data.get("lang", "ru")
-        city = m.text.strip()
-        await state.update_data(city=city, city_display=city)
-        await state.set_state(SetupStates.etat)
-        sel = data.get("etat", {"full": False, "part": False})
-        await m.answer(t(lang, "choose_etat"), reply_markup=kb_etat(lang, sel))
-    except Exception as e:
-        logger.warning(f"on_city_custom error: {e}")
 
 
 @router.callback_query(SetupStates.etat, F.data.startswith("e_"))
@@ -2757,58 +2776,65 @@ async def scheduled_check():
 
 # ==================== АВТОМАТИЧЕСКАЯ ОЧИСТКА БАЗЫ ДАННЫХ И ИСТОРИИ ОТПРАВКИ ====================
 
+# Сколько дней хранить вакансии каждого источника (ключ — нормализованное название: нижний регистр, только a-z0-9,
+# совпадение по вхождению, как у хэштегов). Всё, чего тут нет, чистится через CLEANUP_DEFAULT_DAYS.
+# Зачем держать дольше: скрапер видит объявление, пока оно живо на сайте. Если мы удалили его из БД раньше,
+# чем оно исчезло с сайта — скрапер добавит его заново как «новое» и юзеры получат дубль.
+# У Lento и RocketJobs вакансии живут долго и выходят редко, поэтому им нужен длинный срок.
+CLEANUP_DEFAULT_DAYS = 3
+CLEANUP_DAYS_BY_SOURCE = {
+    "rocketjobs": 30,
+    "lento": 30,
+}
+
+def cleanup_days_for(source) -> int:
+    key = re.sub(r"[^a-z0-9]", "", str(source or "").lower())
+    for needle, days in CLEANUP_DAYS_BY_SOURCE.items():
+        if needle in key:
+            return days
+    return CLEANUP_DEFAULT_DAYS
+
+
 async def db_cleanup_database():
     """
     Ежедневная асинхронная очистка базы данных Supabase от устаревших вакансий и логов истории отправки.
-    - Обычные вакансии (OLX, Praca.pl и др.) и история их отправки удаляются через 3 дня.
-    - Вакансии RocketJobs и история их отправки хранятся дольше и удаляются только через 30 дней.
+    Срок хранения зависит от источника (см. CLEANUP_DAYS_BY_SOURCE):
+    - обычные вакансии (OLX, Praca.pl и др.) — CLEANUP_DEFAULT_DAYS (3 дня);
+    - RocketJobs и Lento — 30 дней, чтобы не получать дубли, пока объявление ещё висит на сайте.
     """
     logger.info("🗑 Запуск планировщика очистки базы данных от устаревших данных...")
     try:
         now = datetime.now(timezone.utc)
-        cutoff_standard = (now - timedelta(days=3)).isoformat()
-        cutoff_rocket = (now - timedelta(days=30)).isoformat()
+        min_days = min([CLEANUP_DEFAULT_DAYS, *CLEANUP_DAYS_BY_SOURCE.values()])
+        cutoff_min = (now - timedelta(days=min_days)).isoformat()
 
-        # 1. Сбор ID обычных вакансий (OLX, Praca.pl), созданных более 3 дней назад
+        # Забираем всё, что старше минимального срока, и решаем по каждому источнику в Python:
+        # так срок можно менять в одном словаре и не важно, как именно записан source в БД ("Lento" / "Lento.pl").
         offset = 0
         page_size = 1000
-        standard_ids = []
+        total_old_ids = []
         while True:
             r = await asyncio.to_thread(
                 lambda: supabase.table("jobs")
-                .select("id")
-                .neq("source", "RocketJobs")
-                .lt("created_at", cutoff_standard)
+                .select("id, source, created_at")
+                .lt("created_at", cutoff_min)
                 .range(offset, offset + page_size - 1)
                 .execute()
             )
             if not r or not r.data:
                 break
-            standard_ids.extend([row["id"] for row in r.data])
+            for row in r.data:
+                try:
+                    created = datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00"))
+                    if created.tzinfo is None:
+                        created = created.replace(tzinfo=timezone.utc)
+                except Exception:
+                    continue
+                if created < now - timedelta(days=cleanup_days_for(row.get("source"))):
+                    total_old_ids.append(row["id"])
             if len(r.data) < page_size:
                 break
             offset += page_size
-
-        # 2. Сбор ID вакансий RocketJobs, созданных более 30 дней назад
-        offset = 0
-        rocket_ids = []
-        while True:
-            r = await asyncio.to_thread(
-                lambda: supabase.table("jobs")
-                .select("id")
-                .eq("source", "RocketJobs")
-                .lt("created_at", cutoff_rocket)
-                .range(offset, offset + page_size - 1)
-                .execute()
-            )
-            if not r or not r.data:
-                break
-            rocket_ids.extend([row["id"] for row in r.data])
-            if len(r.data) < page_size:
-                break
-            offset += page_size
-
-        total_old_ids = standard_ids + rocket_ids
 
         if total_old_ids:
             logger.info(f"🗑 Найдено {len(total_old_ids)} устаревших вакансий для полной очистки.")
