@@ -1572,7 +1572,7 @@ def format_job(job):
 
     tag = source_hashtag(job.get("source"))
     if tag:
-        details.append(tag)
+        details.append(f"📌 {tag}")
 
     quote_content = "\n".join(details)
 
