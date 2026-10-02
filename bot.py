@@ -180,6 +180,8 @@ CHANNELS_MAPPING = {
     "Kraków": {"id": -1003956905015, "limit": 9},                          # @PracaKrakow
     "Szczecin": {"id": -1003953428416, "limit": 7},                        # @Praca_Szczecin
     "Gliwice": {"id": -1003332626026, "limit": 7},                        # @rabota_gliwice
+    "Katowice": {"id": -1004380046261, "limit": 7},                          # @Katowice_rabota
+    "Opole": {"id": -1004412087784, "limit": 7},                          # @Praca_Opole
     # Познань (по просьбе админа): до 8 вакансий за пост, не чаще раза в 2.5 ч,
     # только с 09:00 до 21:00 по Варшаве, без звука
     "Poznań": {"id": -1001716517416, "limit": 8, "thread_id": 81854,
