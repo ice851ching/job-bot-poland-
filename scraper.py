@@ -35,7 +35,7 @@ GOWORK_SEMAPHORE = asyncio.Semaphore(1)  # Gowork тоже очень чувст
 # Города твоих Telegram-каналов (парсер будет шерстить их ВСЕГДА!)
 CHANNEL_CITIES = [
     "Lublin", "Białystok", "Radom", "Częstochowa", "Gdańsk",
-    "Poznań", "Rzeszów", "Szczecin", "Kraków", "Katowice", "Opole", "Łódź", "Gliwice", "Sosnowiec", "Bydgoszcz"
+    "Poznań", "Rzeszów", "Szczecin", "Kraków", "Katowice", "Opole", "Łódź", "Gliwice", "Sosnowiec", "Toruń", "Bydgoszcz"
 ]
 
 MAIN_SCAN_CITIES = [
