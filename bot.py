@@ -87,6 +87,54 @@ BLOCKED_KEYWORDS = [
     "kierowca uber", "kierowca bolt", "kierowca glovo",
 ]
 
+# Стоп-слова для «не нашей» аудитории (белые воротнички, врачи, IT, переводчики).
+# Сравнение идёт по заголовку, без регистра и БЕЗ польских диакритик (ł -> l, ą -> a и т.д.),
+# так что писать можно в любом виде. Слова — основы: "lekarz" ловит "lekarza", "lekarz dentysta" и т.д.
+STOP_WORDS = [
+    # --- МЕДИЦИНА (высший состав) ---
+    "lekarz", "stomatolog", "dentyst", "chirurg", "pediatr", "kardiolog", "neurolog",
+    "psychiatr", "psycholog", "psychoterapeut", "ginekolog", "anestezjolog", "radiolog",
+    "dermatolog", "ortoped", "okulist", "farmaceut", "weterynarz", "ordynator",
+    "fizjoterapeut",
+
+    # --- ВЫСШЕЕ ЗВЕНО / ИНЖЕНЕРЫ / ПРОЕКТЫ ---
+    "inzynier", "architekt", "geodet", "projektant",
+    "kierownik", "kierownicz", "dyrektor", "manager", "head of",
+
+    # --- ЮРИСПРУДЕНЦИЯ И ФИНАНСЫ ---
+    "prawnik", "adwokat", "radca prawny", "glowny ksiegowy", "glowna ksiegowa",
+    "biegly rewident", "doradca podatkowy", "notariusz",
+
+    # --- IT ---
+    "programist", "developer", "devops", "software", "frontend", "front-end", "front end",
+    "backend", "back-end", "back end", "fullstack", "full-stack", "full stack",
+    "java", "python", "sysadmin", "administrator systemow", "tester oprogramowania",
+    "data scientist", "data analyst", "analityk danych", "business analyst",
+    "cybersecurity", "cyberbezpieczenstw", "helpdesk", "help desk",
+    "ux designer", "ui/ux", "product owner", "scrum",
+
+    # --- ПЕРЕВОДЧИКИ / ЯЗЫКИ ---
+    "tlumacz", "translator", "lektor", "native speaker",
+    "jezyka chinskiego", "jezyk chinski", "jezyku chinskim", "po chinsku",
+    "chinese", "mandaryn", "mandarin",
+]
+
+# Короткие слова, которые нельзя искать как подстроку (иначе "it" совпадёт с половиной заголовков).
+# Здесь совпадение только по ЦЕЛОМУ слову: "Specjalista IT" -> блок, "Magazynier Bielsko" -> ок.
+STOP_WORDS_EXACT = ["it", "qa"]
+
+_PL_FOLD = str.maketrans("ąćęłńóśźż", "acelnoszz")
+
+
+def _fold(text: str) -> str:
+    return (text or "").lower().translate(_PL_FOLD)
+
+
+_BLOCKED_SUBSTRINGS = tuple(dict.fromkeys(_fold(w) for w in BLOCKED_KEYWORDS + STOP_WORDS))
+_BLOCKED_WORDS_RE = re.compile(
+    r"(?<!\w)(?:" + "|".join(re.escape(_fold(w)) for w in STOP_WORDS_EXACT) + r")(?!\w)"
+)
+
 # Подписи кнопок нижнего меню локализованы через TEXTS (ключи btn_reset/btn_stop/btn_help/btn_restart/btn_cv)
 
 # Шаблоны резюме, доступные только VIP-пользователям (совпадает с data-tpl в index.html)
@@ -649,8 +697,11 @@ def job_matches_filter(job, user_filter):
 
 
 def is_delivery_job(job):
-    title = (job.get("title") or "").lower()
-    return any(kw in title for kw in BLOCKED_KEYWORDS)
+    """True, если вакансию нельзя слать: курьеры/такси (BLOCKED_KEYWORDS) или стоп-слова (STOP_WORDS)."""
+    title = _fold(job.get("title"))
+    if any(kw in title for kw in _BLOCKED_SUBSTRINGS):
+        return True
+    return bool(_BLOCKED_WORDS_RE.search(title))
 
 
 def is_invalid_olx_url(url: str) -> bool:
