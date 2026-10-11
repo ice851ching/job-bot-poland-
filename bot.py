@@ -91,32 +91,20 @@ BLOCKED_KEYWORDS = [
 # Сравнение идёт по заголовку, без регистра и БЕЗ польских диакритик (ł -> l, ą -> a и т.д.),
 # так что писать можно в любом виде. Слова — основы: "lekarz" ловит "lekarza", "lekarz dentysta" и т.д.
 STOP_WORDS = [
-    # --- МЕДИЦИНА (высший состав) ---
-    "lekarz", "stomatolog", "dentyst", "chirurg", "pediatr", "kardiolog", "neurolog",
-    "psychiatr", "psycholog", "psychoterapeut", "ginekolog", "anestezjolog", "radiolog",
-    "dermatolog", "ortoped", "okulist", "farmaceut", "weterynarz", "ordynator",
-    "fizjoterapeut",
+    # --- СТАРЫЙ БАЗОВЫЙ МУСОР (Врачи, инженеры, юристы, топ-менеджеры) ---
+    "lekarz", "lekarka", "stomatolog", "dentysta", "chirurg", "pediatra",
+    "kardiolog", "neurolog", "psychiatra", "farmaceuta", "farmaceutka", 
+    "weterynarz", "ordynator", "fizjoterapeuta", "fizjoterapeutka",
+    "inżynier", "architekt", "kierownik budowy", "geodeta", "projektant",
+    "kierownik", "kierowniczka", "dyrektor", "manager", "head of",
+    "prawnik", "adwokat", "radca prawny", "główny księgowy", "główna księgowa",
+    "biegły rewident", "doradca podatkowy", "notariusz",
+    "spawacz", "tokarz", "operator cnc", "operator dźwigu", 
+    "kwalifikowany pracownik ochrony",
 
-    # --- ВЫСШЕЕ ЗВЕНО / ИНЖЕНЕРЫ / ПРОЕКТЫ ---
-    "inzynier", "architekt", "geodet", "projektant",
-    "kierownik", "kierownicz", "dyrektor", "manager", "head of",
-
-    # --- ЮРИСПРУДЕНЦИЯ И ФИНАНСЫ ---
-    "prawnik", "adwokat", "radca prawny", "glowny ksiegowy", "glowna ksiegowa",
-    "biegly rewident", "doradca podatkowy", "notariusz",
-
-    # --- IT ---
-    "programist", "developer", "devops", "software", "frontend", "front-end", "front end",
-    "backend", "back-end", "back end", "fullstack", "full-stack", "full stack",
-    "java", "python", "sysadmin", "administrator systemow", "tester oprogramowania",
-    "data scientist", "data analyst", "analityk danych", "business analyst",
-    "cybersecurity", "cyberbezpieczenstw", "helpdesk", "help desk",
-    "ux designer", "ui/ux", "product owner", "scrum",
-
-    # --- ПЕРЕВОДЧИКИ / ЯЗЫКИ ---
-    "tlumacz", "translator", "lektor", "native speaker",
-    "jezyka chinskiego", "jezyk chinski", "jezyku chinskim", "po chinsku",
-    "chinese", "mandaryn", "mandarin",
+    # --- НОВЫЙ МУСОР: КОМАНДИРОВКИ И РАБОТА ЗА РУБЕЖОМ (Германия, Голландия и т.д.) ---
+    "niemcy", "holandia", "belgia", "norwegia", "szwecja", "francja", 
+    "zagranica", "delegacje", "delegacja", "wyjazd do", "praca za granicą"
 ]
 
 # Короткие слова, которые нельзя искать как подстроку (иначе "it" совпадёт с половиной заголовков).
