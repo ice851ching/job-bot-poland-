@@ -981,7 +981,7 @@ def db_log_vip_payment(tid, charge_id, stars, vip_until):
 def db_get_jobs_for_city(city, limit=150, hours=24):
     """С автоповтором на любые сетевые ошибки"""
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-    fields = "id, external_id, title, city, salary, url, source, umowa, etat, created_at"
+    fields = "id, external_id, title, city, salary, url, source, umowa, etat, extra, created_at"
     for attempt in range(3):
         try:
             if city == "all":
@@ -1575,6 +1575,7 @@ SOURCE_HASHTAGS = [
     ("rocketjobs", "#RocketJobs"),
     ("lento", "#Lento"),
     ("olx", "#OLX"),
+    ("aplikuj", "#Aplikuj"),
     ("praca", "#PracaPL"),
 ]
 
@@ -1613,6 +1614,14 @@ def format_job(job):
         details.append(f"📍 {clean(job['city'])}")
     if job.get("salary"):
         details.append(f"💰 {clean(job['salary'])}")
+
+    # Доп. пометки (praca od zaraz, bez doświadczenia...) — только у Aplikuj, через запятую
+    if "aplikuj" in str(job.get("source") or "").lower() and job.get("extra"):
+        extras = [clean(x) for x in str(job["extra"]).split(",")]
+        extras = [x for x in extras if x]
+        if extras:
+            extras[0] = extras[0][:1].upper() + extras[0][1:]
+            details.append(f"💬 {', '.join(extras)}")
 
     tag = source_hashtag(job.get("source"))
     if tag:
