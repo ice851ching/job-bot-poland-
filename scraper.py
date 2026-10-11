@@ -1574,6 +1574,169 @@ async def parse_gowork(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
         return 0
 
 
+# ==================== APLIKUJ.PL ====================
+
+APLIKUJ_BASE = "https://www.aplikuj.pl"
+# Фильтры зашиты в ссылку (stacjonarnie, UoP + zlecenie, только Польша). Меняется только slug города.
+APLIKUJ_FILTERS = "distance=0&full_office_work=1&employment_type%5B0%5D=3&employment_type%5B1%5D=1&only_pl=1"
+APLIKUJ_MAX_PAGES = 3  # если параметр &page=N на сайте другой — парсер сам остановится на повторе выдачи
+APLIKUJ_ID_RE = re.compile(r"/oferta/(\d+)")
+# Классы лейблов, которые разбираются в отдельные поля. Все остальные лейблы
+# (praca od zaraz, bez doświadczenia и т.д.) уезжают в колонку extra.
+APLIKUJ_CORE_LABELS = {"salary", "workPlace", "employmentType"}
+
+
+def aplikuj_build_url(slug: str, page: int) -> str:
+    url = f"{APLIKUJ_BASE}/praca/{slug}?{APLIKUJ_FILTERS}"
+    if page > 1:
+        url += f"&page={page}"
+    return url
+
+
+def extract_aplikuj_card(card):
+    """Разбирает одну карточку Aplikuj (li.offer-card). Возвращает dict или None, если карточка битая."""
+    title_el = card.select_one("a.offer-title")
+    if not title_el:
+        return None
+
+    title = strip_html(title_el.get("title") or title_el.get_text(" ", strip=True))
+    link = (title_el.get("href") or "").strip().split("?")[0].split("#")[0]
+    if not title or len(title) < 3 or not link:
+        return None
+    if not link.startswith("http"):
+        link = APLIKUJ_BASE + link
+
+    m = APLIKUJ_ID_RE.search(link)
+    ad_id = m.group(1) if m else None
+
+    labels = {}   # ключ класса (salary / workPlace / ...) -> текст
+    extras = []   # некорневые лейблы -> колонка extra
+    for li in card.select("ul.offer-card-labels-list > li"):
+        key = None
+        for c in li.get("class") or []:
+            if c.startswith("offer-card-labels-list-item--"):
+                key = c.split("--", 1)[1]
+        txt = re.sub(r"\s+", " ", li.get_text(" ", strip=True).replace("\xa0", " ")).strip()
+        if not key or not txt:
+            continue
+        if key in APLIKUJ_CORE_LABELS:
+            labels[key] = txt
+        elif txt not in extras:
+            extras.append(txt)
+
+    salary = labels.get("salary")
+    if salary and not re.search(r"\d", salary):
+        salary = None
+
+    contract_txt = labels.get("employmentType") or ""
+    return {
+        "ad_id": ad_id,
+        "title": title,
+        "link": link,
+        "city": labels.get("workPlace"),
+        "salary": salary,
+        "umowa": normalize_umowa(contract_txt) or normalize_umowa(title),
+        "etat": normalize_etat(contract_txt, salary) or normalize_etat(title, salary),
+        "extra": ", ".join(extras) or None,
+    }
+
+
+async def parse_aplikuj(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
+    try:
+        slug = get_city_slug(city)
+        if not slug:
+            return 0
+
+        jobs_to_save = []
+        total_cards = 0
+        no_salary = 0
+        ignored_duplicate = 0
+        ignored_city = 0
+        parse_errors = 0
+        seen_this_run = set()
+        seen_links = set()
+
+        for page in range(1, APLIKUJ_MAX_PAGES + 1):
+            await asyncio.sleep(random.uniform(1.0, 2.5))
+
+            url = aplikuj_build_url(slug, page)
+            status, html = await asyncio.to_thread(fetch_url_with_retry, url, "https://www.google.com/")
+            if status != 200 or not html:
+                logger.warning(f"Aplikuj {city} p{page}: status={status}")
+                break
+
+            soup = BeautifulSoup(html, "html.parser")
+            cards = soup.select("li.offer-card")
+            if not cards:
+                if page == 1:
+                    logger.warning(f"⚠️ Aplikuj: 0 cards for {city}. Page title: {soup.title.string if soup.title else 'N/A'}")
+                break
+
+            # страница вне диапазона / неверный параметр page может отдать ту же выдачу — выходим
+            page_links = {
+                (c.select_one("a.offer-title").get("href") or "").split("?")[0]
+                for c in cards if c.select_one("a.offer-title")
+            }
+            if page > 1 and page_links <= seen_links:
+                break
+            seen_links |= page_links
+            total_cards += len(cards)
+
+            for card in cards:
+                try:
+                    data = extract_aplikuj_card(card)
+                    if not data:
+                        parse_errors += 1
+                        continue
+
+                    # Берём только вакансии с указанной зарплатой
+                    if not data["salary"]:
+                        no_salary += 1
+                        continue
+
+                    job_city = data["city"] or city
+                    if not city_matches(job_city, city):
+                        ignored_city += 1
+                        continue
+
+                    ext_id = hashlib.md5(f"aplikuj_{data['ad_id'] or data['link']}".encode()).hexdigest()
+
+                    if ext_id in seen_this_run:
+                        continue
+                    seen_this_run.add(ext_id)
+
+                    async with lock:
+                        if ext_id in existing_ids:
+                            ignored_duplicate += 1
+                            continue
+                        existing_ids.add(ext_id)
+
+                    jobs_to_save.append({
+                        "external_id": ext_id,
+                        "title": data["title"],
+                        "city": job_city,
+                        "salary": data["salary"],
+                        "url": data["link"],
+                        "source": "Aplikuj",
+                        "umowa": data["umowa"],
+                        "etat": data["etat"],
+                        "extra": data["extra"],  # только Aplikuj: «praca od zaraz», «bez doświadczenia» и т.п.
+                    })
+                except Exception as e:
+                    parse_errors += 1
+                    logger.debug(f"Aplikuj card error: {e}")
+
+        saved = await db_insert_jobs_batch(jobs_to_save)
+        logger.info(
+            f"Aplikuj saved={saved} (cards={total_cards}, no_salary={no_salary}, duplicates={ignored_duplicate}, "
+            f"city_mismatch={ignored_city}, errors={parse_errors}) city={city}"
+        )
+        return saved
+    except Exception as e:
+        logger.error(f"parse_aplikuj({city}) error: {e}")
+        return 0
+
+
 # ==================== ДИСПЕТЧЕР И MAIN ====================
 
 async def scrape_city_task(
@@ -1594,6 +1757,7 @@ async def scrape_city_task(
             parse_rocketjobs(city, existing_ids, lock),
             parse_fachpraca(city, existing_ids, lock),
             parse_lento(city, existing_ids, lock),  # бесплатный источник — парсим во всех активных городах
+            parse_aplikuj(city, existing_ids, lock),  # бесплатный источник, только вакансии с зарплатой
         ]
         if city_has_vip:
             parse_jobs.append(parse_infopraca(city, existing_ids, lock))
