@@ -104,7 +104,9 @@ STOP_WORDS = [
 
     # --- НОВЫЙ МУСОР: КОМАНДИРОВКИ И РАБОТА ЗА РУБЕЖОМ (Германия, Голландия и т.д.) ---
     "niemcy", "holandia", "belgia", "norwegia", "szwecja", "francja", 
-    "zagranica", "delegacje", "delegacja", "wyjazd do", "praca za granicą"
+    "zagranica", "delegacje", "delegacja", "wyjazd do", "niemczech", "hydraulik", "programista", "informatyk", "księgowa",
+    "praca za granicą", "księgowy/a", "fakturzyst", "lektromonter", "sieci elektroenergetycznych", "zarządzania flotą", "księgowy",
+    "irlandia", "farmacji", "Przedstawiciel handlowy", "Przedstawicielka handlowa"
 ]
 
 # Короткие слова, которые нельзя искать как подстроку (иначе "it" совпадёт с половиной заголовков).
