@@ -227,7 +227,7 @@ CHANNELS_MAPPING = {
     # только с 09:00 до 21:00 по Варшаве, без звука
     "Poznań": {"id": -1001716517416, "limit": 8, "thread_id": 81854,
                "interval_hours": 2.5, "silent": True,
-               "active_hours": (9, 21), "lead_button": False},                                  # Ветка познань
+               "active_hours": (9, 21)},                                                          # Ветка познань (кнопка анкеты: каждая 5-я карточка)
     "Bydgoszcz": {"id": -1001759834702, "limit": 5, "thread_id": 1427, "lead_button": False}    # Ветка 1445 в Быдгощ @ua_bydgoszcz
 }
 
@@ -1116,6 +1116,11 @@ def db_create_lead(record: dict):
             r = supabase.table("leads").insert(record).execute()
             return r.data[0] if r and r.data else None
         except Exception as e:
+            # Колонки source_channel ещё нет в таблице — не теряем заявку, сохраняем без неё
+            if "source_channel" in str(e) and "source_channel" in record:
+                logger.warning("leads.source_channel column is missing; saving lead without source")
+                record = {k: v for k, v in record.items() if k != "source_channel"}
+                continue
             if attempt < 2:
                 time.sleep(0.5)
                 continue
@@ -1424,6 +1429,11 @@ async def lead_capture_handler(request: web.Request):
     job_id = str(job_id_raw).strip() if job_id_raw else None
     source_url = str(payload.get("source_url") or "").strip()[:2048]
 
+    # Источник лида: берём из start_param, подписанного Telegram (job_<id>_<метка>), а не из тела формы
+    sp_job_id, source_channel = parse_lead_start_param(get_verified_start_param(payload))
+    if sp_job_id:
+        job_id = sp_job_id
+
     if (
         len(name) < 2
         or len(phone.replace(" ", "")) < 9
@@ -1455,6 +1465,7 @@ async def lead_capture_handler(request: web.Request):
             "job_id": job_id,
             "job_title": job_title,
             "source_url": source_url or job_url_from_db,
+            "source_channel": source_channel,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -1569,7 +1580,49 @@ def is_valid_job_url(url) -> bool:
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
 
-def build_lead_app_url(job_id):
+def lead_source_tag(chat_id) -> str:
+    """
+    Метка источника лида для start_param: slug города канала/группы из CHANNELS_MAPPING
+    (poznan, krakow, ...), "channel" для неизвестного отрицательного chat_id, "bot" для личных сообщений.
+    """
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return "bot"
+    if cid >= 0:
+        return "bot"
+    for city, cfg in CHANNELS_MAPPING.items():
+        if cfg.get("id") == cid:
+            return re.sub(r"[^a-z0-9]", "", _fold(city)) or "channel"
+    return "channel"
+
+
+def parse_lead_start_param(sp):
+    """
+    Разбирает start_param формы: "job_833100_poznan" -> ("833100", "poznan"),
+    "job_833100" -> ("833100", None), всё остальное -> (None, None).
+    """
+    m = re.match(r"^job_(\d+)(?:_([a-z0-9-]+))?$", str(sp or ""))
+    if not m:
+        return None, None
+    return m.group(1), m.group(2)
+
+
+def get_verified_start_param(payload: dict):
+    """
+    start_param из initData, ПОДПИСАННОГО Telegram (подделать нельзя).
+    Если подписи нет или она неверна — None.
+    """
+    init_data = payload.get("init_data") or ""
+    if not init_data or not verify_telegram_webapp_data(init_data, BOT_TOKEN):
+        return None
+    try:
+        return dict(urllib.parse.parse_qsl(init_data)).get("start_param") or None
+    except Exception:
+        return None
+
+
+def build_lead_app_url(job_id, source=None):
     """
     Собирает обычную https-ссылку на Mini App лид-формы: https://t.me/<бот>/<app>?startapp=job_<id>.
     ВАЖНО: это url-кнопка, а не WebAppInfo — так она открывается и из постов в каналах-сателлитах.
@@ -1580,11 +1633,14 @@ def build_lead_app_url(job_id):
     """
     if not BOT_USERNAME or not LEAD_APP_SHORT_NAME:
         return None
-    payload = re.sub(r"[^A-Za-z0-9_-]", "", f"job_{job_id}" if job_id is not None else "lead")[:64]
+    base = f"job_{job_id}" if job_id is not None else "lead"
+    if source and job_id is not None:
+        base = f"{base}_{source}"  # job_<id>_<метка источника>, напр. job_833100_poznan
+    payload = re.sub(r"[^A-Za-z0-9_-]", "", base)[:64]
     return f"https://t.me/{BOT_USERNAME}/{LEAD_APP_SHORT_NAME}?startapp={payload}"
 
 
-def get_job_keyboard(job_url, job_id=None, with_lead: bool = False, button_text: str = JOB_BUTTON_TEXT):
+def get_job_keyboard(job_url, job_id=None, with_lead: bool = False, button_text: str = JOB_BUTTON_TEXT, lead_source=None):
     """
     Собирает inline-клавиатуру вакансии:
       1) кнопка-ссылка на саму вакансию (как раньше),
@@ -1598,7 +1654,7 @@ def get_job_keyboard(job_url, job_id=None, with_lead: bool = False, button_text:
         safe_url = job_url.strip().replace(" ", "%20")
         rows.append([InlineKeyboardButton(text=button_text, url=safe_url)])
 
-    lead_url = build_lead_app_url(job_id) if with_lead else None
+    lead_url = build_lead_app_url(job_id, lead_source) if with_lead else None
     if lead_url:
         rows.append([InlineKeyboardButton(text=LEAD_BUTTON_TEXT, url=lead_url)])
 
@@ -1693,7 +1749,7 @@ async def send_job_card(chat_id, job, lead_allowed: bool = True, **kwargs):
     """
     url = job.get("url")
     show_lead = lead_allowed and _lead_due(chat_id)
-    kb = get_job_keyboard(url, job.get("id"), with_lead=show_lead)
+    kb = get_job_keyboard(url, job.get("id"), with_lead=show_lead, lead_source=lead_source_tag(chat_id))
     if show_lead:
         if build_lead_app_url(job.get("id")):
             logger.info(f"📝 Lead button added for chat {chat_id}, job {job.get('id')}")
