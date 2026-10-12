@@ -841,22 +841,61 @@ def db_get_city_audience():
     }
 
 
-def db_get_sent_job_ids(tid) -> set:
+def db_get_sent_job_ids(tid, job_ids=None) -> set:
     """
-    Бронебойный запрос истории отправки.
-    Передаёт ID напрямую в Supabase, без лишней MD5-магии.
+    История отправки для tid.
+    - job_ids передан: возвращает, какие из них уже отправлялись (быстро и без лимита 1000 строк PostgREST).
+    - job_ids не передан: вся история с пагинацией (Supabase молча режет ответ до 1000 строк).
+    При ошибке возвращает None (вызывающий код пропускает цикл, чтобы не слать дубли).
     """
-    for attempt in range(3):
-        try:
-            r = supabase.table("sent_jobs").select("job_id").eq("telegram_id", tid).execute()
-            return {row["job_id"] for row in r.data} if r.data else set()
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(0.5 * (attempt + 1))
-                continue
-            logger.error(f"❌ db_get_sent_job_ids failed for {tid} after 3 attempts: {e}")
-            return None
-    return None
+    ids = set()
+    try:
+        if job_ids is not None:
+            job_ids = list(job_ids)
+            for i in range(0, len(job_ids), 100):
+                chunk = job_ids[i:i + 100]
+                for attempt in range(3):
+                    try:
+                        r = (
+                            supabase.table("sent_jobs")
+                            .select("job_id")
+                            .eq("telegram_id", tid)
+                            .in_("job_id", chunk)
+                            .execute()
+                        )
+                        ids.update(row["job_id"] for row in (r.data or []))
+                        break
+                    except Exception:
+                        if attempt == 2:
+                            raise
+                        time.sleep(0.5 * (attempt + 1))
+        else:
+            offset = 0
+            while True:
+                for attempt in range(3):
+                    try:
+                        r = (
+                            supabase.table("sent_jobs")
+                            .select("job_id")
+                            .eq("telegram_id", tid)
+                            .order("job_id")
+                            .range(offset, offset + 999)
+                            .execute()
+                        )
+                        break
+                    except Exception:
+                        if attempt == 2:
+                            raise
+                        time.sleep(0.5 * (attempt + 1))
+                rows = r.data or []
+                ids.update(row["job_id"] for row in rows)
+                if len(rows) < 1000:
+                    break
+                offset += 1000
+        return ids
+    except Exception as e:
+        logger.error(f"❌ db_get_sent_job_ids failed for {tid} after 3 attempts: {e}")
+        return None
 
 
 def db_mark_sent_batch(tid, job_ids: list) -> bool:
@@ -1714,7 +1753,9 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
         sent, sf, ss, blocked, vip_only = 0, 0, 0, 0, 0
         
         # Получаем историю отправки с предохранителем
-        already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, tid)
+        already_sent_ids = await asyncio.to_thread(
+            db_get_sent_job_ids, tid, [j["id"] for j in jobs if j.get("id") is not None]
+        )
         
         # ЕСЛИ БЫЛ СБОЙ СЕТИ И БАЗА НЕ ОТВЕТИЛА — ПРОПУСКАЕМ ЮЗЕРА (НОЛЬ СПАМА ДУБЛЯМИ!)
         if already_sent_ids is None:
@@ -1866,7 +1907,9 @@ async def post_jobs_to_channels():
             if not jobs:
                 continue
 
-            already_sent_ids = await asyncio.to_thread(db_get_sent_job_ids, channel_id)
+            already_sent_ids = await asyncio.to_thread(
+                db_get_sent_job_ids, channel_id, [j["id"] for j in jobs if j.get("id") is not None]
+            )
             if already_sent_ids is None:
                 continue
 
