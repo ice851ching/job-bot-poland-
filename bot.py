@@ -143,6 +143,7 @@ LEAD_APP_SHORT_NAME = os.getenv("LEAD_APP_SHORT_NAME", "")  # short_name Mini Ap
 LEAD_BUTTON_TEXT = "Nie pasuje? Dobierzemy inną pracę"
 LEAD_EVERY_N = 5  # кнопка анкеты только под каждой N-й вакансией в чате (1 = под каждой)
 _lead_sent_counter: dict = {}  # chat_id -> сколько карточек уже отправлено (в памяти, сбрасывается при рестарте)
+LEAD_EVERY_N_OVERRIDE = {-1001716517416: 1}  # Познань: кнопка анкеты под КАЖДОЙ карточкой (остальные чаты — LEAD_EVERY_N)
 LEAD_LIMIT_PER_DAY = 3  # максимум заявок с одного telegram_id в сутки
 LEAD_STATUS_VALUES = {"pl_ue", "karta_pobytu", "wiza", "ochrona_czasowa"}  # синхронизировано с <select id="status"> в lead_form.html
 
@@ -227,7 +228,7 @@ CHANNELS_MAPPING = {
     # только с 09:00 до 21:00 по Варшаве, без звука
     "Poznań": {"id": -1001716517416, "limit": 8, "thread_id": 81854,
                "interval_hours": 2.5, "silent": True,
-               "active_hours": (9, 21)},                                                          # Ветка познань (кнопка анкеты: каждая 5-я карточка)
+               "active_hours": (9, 21)},                                                          # Ветка познань (кнопка анкеты: под каждой карточкой, см. LEAD_EVERY_N_OVERRIDE)
     "Bydgoszcz": {"id": -1001759834702, "limit": 5, "thread_id": 1427, "lead_button": False}    # Ветка 1445 в Быдгощ @ua_bydgoszcz
 }
 
@@ -1737,7 +1738,8 @@ def format_job(job):
 
 def _lead_due(chat_id) -> bool:
     """True, если следующая карточка в этом чате должна получить кнопку анкеты (каждая LEAD_EVERY_N-я)."""
-    return (_lead_sent_counter.get(chat_id, 0) + 1) % LEAD_EVERY_N == 0
+    n = LEAD_EVERY_N_OVERRIDE.get(chat_id, LEAD_EVERY_N)
+    return (_lead_sent_counter.get(chat_id, 0) + 1) % n == 0
 
 
 async def send_job_card(chat_id, job, lead_allowed: bool = True, **kwargs):
