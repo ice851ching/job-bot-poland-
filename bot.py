@@ -289,6 +289,7 @@ CHANNELS_MAPPING = {
     "Łódź": {"id": -1004493875798, "limit": 7},                          # @LodzRobota
     "Sosnowiec": {"id": -1004475099126, "limit": 7},                          # @rabota_sosnowiec
     "Toruń": {"id": -1004446519984, "limit": 7},                          # @robota_Torun
+    "Zielona Góra": {"id": -1003953807151, "limit": 7},                          # @robota_zielona_gora
     # Познань (по просьбе админа): до 8 вакансий за пост, не чаще раза в 2.5 ч,
     # только с 09:00 до 21:00 по Варшаве, без звука
     "Poznań": {"id": -1001716517416, "limit": 8, "thread_id": 81854,
