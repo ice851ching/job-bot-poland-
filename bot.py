@@ -102,11 +102,49 @@ STOP_WORDS = [
     "spawacz", "tokarz", "operator cnc", "operator dźwigu", 
     "kwalifikowany pracownik ochrony",
 
-    # --- НОВЫЙ МУСОР: КОМАНДИРОВКИ И РАБОТА ЗА РУБЕЖОМ (Германия, Голландия и т.д.) ---
+    # --- НОВЫЙ МУСОР: КОМАНДИРОВКИ И РАБОТА ЗА РУБЕЖОМ ---
     "niemcy", "holandia", "belgia", "norwegia", "szwecja", "francja", 
     "zagranica", "delegacje", "delegacja", "wyjazd do", "niemczech", "hydraulik", "programista", "informatyk", "księgowa",
     "praca za granicą", "księgowy/a", "fakturzyst", "lektromonter", "sieci elektroenergetycznych", "zarządzania flotą", "księgowy",
-    "irlandia", "farmacji", "Przedstawiciel handlowy", "Przedstawicielka handlowa"
+    "irlandia", "farmacji", "Przedstawiciel handlowy", "Przedstawicielka handlowa",
+
+    # --- СПЕЦИАЛИЗИРОВАННЫЕ, ОФИСНЫЕ И ВЫСОКОКВАЛИФИЦИРОВАННЫЕ ВАКАНСИИ ---
+    "trader", "commodity", "e-commerce", "geospatial", "data technician",
+    "synoptyk", "meteorologik", "wprowadzania danych", "asystent biura",
+    "asystentka biura", "administracyjno-biurowy", "księgowość",
+    "onkologocznego", "dilo", "pielęgniarka", "pielęgniarz", "kosmetołog",
+    "kosmetolog", "depilacji", "laserowej",
+    "promotor", "liderów sprzedaży", "lider sprzedaży", "ludzi sprzedaży",
+    "konsultant", "opiekun klienta b2b", "handlowiec", "przedstawiciel",
+    "projekty inwestycyjne", "projektów inwestycyjnych",
+    "korepetytor", "korepetytorka", "trener personalny", "trenerka personalna",
+    "cieśla", "zbrojarz", "murarz", "kominiarz", "serwisant", "klimatyzacji",
+
+    # --- ВОДИТЕЛИ-МЕЖДУНАРОДНИКИ И ТЯЖЕЛАЯ ТЕХНИКА (C, E, C+E) ---
+    "c+e", "kat. c+e", "kat c+e", "cementowóz", "kierowca międzynarodowy", 
+    "kierowca kat. c", "kierowca c", "kierowca e", "autotransporter",
+
+    # --- ОФИС, АНАЛИТИКА, ПСИХОЛОГИ, ОБРАЗОВАНИЕ, МЕХАНИКИ ---
+    "spedytor", "spedytorka", "analityk danych", "analityk biznesowy",
+    "biznesu edukacyjnego", "raportowania i analiz", "salon sprzedaży",
+    "regionalny menedżer", "regionalna menedżerka", "psycholog",
+    "konsultant medyczny", "mechanik samochodowy", "autobusy",
+    "zwojenie silników", "stacja prób", "nauczyciel", "nauczycielka",
+    "przedszkola", "anatomii", "sprzedaży farmaceutycznej",
+
+    # --- ТЕРАПИЯ, БАНКИ, СЛОЖНАЯ ИНЖЕНЕРИЯ, HR, КРЕАТИВ ---
+    "psychoterapeuta", "psychoterapeutka", "serwisant pv", "bankier",
+    "logopedę", "logopeda", "utrzymanie ruchu", "mechatronik",
+    "doradca biznesowy", "blacharz", "grafik", "asystent projektów",
+    "compliance", "talent acquisition", "rekrutacja opiekunek",
+    "elektryk przemysłowy", "działu personalnego", "telemarketer",
+    "video content creator",
+
+    # --- НОВЫЙ БЛОК: ЭНЕРГЕТИКА, МАРКЕТИНГ, СПЕЦТЕХНИКА, B2B И АДМИНИСТРАЦИЯ ---
+    "energetyk", "energetyczka", "okablowanie rozdzielnic", "performance marketingu",
+    "handlowiec b2b", "koparko-ładowarki", "koparko-ładowarka", "administracyjno-finansowych",
+    "przedstawiciel bankowy", "sprzedaży aut z usa", "leasingu",
+    "sprzedaży zagranicznej", "koordynacja pracy biura", "koordynacji pracy biura"
 ]
 
 # Короткие слова, которые нельзя искать как подстроку (иначе "it" совпадёт с половиной заголовков).
@@ -1728,8 +1766,8 @@ def format_job(job):
     quote_content = "\n".join(details)
 
     message = (
-        f"💼 <b>{title}</b>\n\n"
-        f"<blockquote>{quote_content}</blockquote>\n\n"
+        f"💼 <b>{title}</b>\n"
+        f"<blockquote>{quote_content}</blockquote>\n"
         f"<a href='https://t.me/szukam_pracy_bot'>@szukam_pracy_bot</a> — Świeże oferty pracy w Polsce 🇵🇱"
     )
 
