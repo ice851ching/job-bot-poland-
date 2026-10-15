@@ -91,7 +91,7 @@ BLOCKED_KEYWORDS = [
 # Сравнение идёт по заголовку, без регистра и БЕЗ польских диакритик (ł -> l, ą -> a и т.д.),
 # так что писать можно в любом виде. Слова — основы: "lekarz" ловит "lekarza", "lekarz dentysta" и т.д.
 STOP_WORDS = [
-    # --- СТАРЫЙ БАЗОВЫЙ МУСОР (Врачи, инженеры, юристы, топ-менеджеры) ---
+    # --- ВРАЧИ, ИНЖЕНЕРЫ, ЮРИСТЫ, ТОП-МЕНЕДЖМЕНТ ---
     "lekarz", "lekarka", "stomatolog", "dentysta", "chirurg", "pediatra",
     "kardiolog", "neurolog", "psychiatra", "farmaceuta", "farmaceutka", 
     "weterynarz", "ordynator", "fizjoterapeuta", "fizjoterapeutka",
@@ -102,57 +102,76 @@ STOP_WORDS = [
     "spawacz", "tokarz", "operator cnc", "operator dźwigu", 
     "kwalifikowany pracownik ochrony",
 
-    # --- НОВЫЙ МУСОР: КОМАНДИРОВКИ И РАБОТА ЗА РУБЕЖОМ ---
+    # --- КОМАНДИРОВКИ, ГЕРМАНИЯ И РАБОТА ЗА РУБЕЖОМ ---
     "niemcy", "holandia", "belgia", "norwegia", "szwecja", "francja", 
     "zagranica", "delegacje", "delegacja", "wyjazd do", "niemczech", "hydraulik", "programista", "informatyk", "księgowa",
     "praca za granicą", "księgowy/a", "fakturzyst", "lektromonter", "sieci elektroenergetycznych", "zarządzania flotą", "księgowy",
-    "irlandia", "farmacji", "Przedstawiciel handlowy", "Przedstawicielka handlowa",
+    "irlandia", "farmacji", "przedstawiciel handlowy", "przedstawicielka handlowa", "stralsund",
 
-    # --- СПЕЦИАЛИЗИРОВАННЫЕ, ОФИСНЫЕ И ВЫСОКОКВАЛИФИЦИРОВАННЫЕ ВАКАНСИИ ---
+    # --- ТЯЖЁЛОЕ IT, РAZRABOTKA, ERP, СЛОЖНАЯ АНАЛИТИКА ---
     "trader", "commodity", "e-commerce", "geospatial", "data technician",
     "synoptyk", "meteorologik", "wprowadzania danych", "asystent biura",
     "asystentka biura", "administracyjno-biurowy", "księgowość",
-    "onkologocznego", "dilo", "pielęgniarka", "pielęgniarz", "kosmetołog",
-    "kosmetolog", "depilacji", "laserowej",
-    "promotor", "liderów sprzedaży", "lider sprzedaży", "ludzi sprzedaży",
-    "konsultant", "opiekun klienta b2b", "handlowiec", "przedstawiciel",
-    "projekty inwestycyjne", "projektów inwestycyjnych",
-    "korepetytor", "korepetytorka", "trener personalny", "trenerka personalna",
-    "cieśla", "zbrojarz", "murarz", "kominiarz", "serwisant", "klimatyzacji",
+    "systemów erp", "web developer", "wordpress", "planowania i analiz",
+    "analityk danych", "analityk biznesowy", "raportowania i analiz",
 
-    # --- ВОДИТЕЛИ-МЕЖДУНАРОДНИКИ И ТЯЖЕЛАЯ ТЕХНИКА (C, E, C+E) ---
+    # --- ЛИЦЕНЗИРУЕМАЯ МЕДИЦИНА И ЛАБОРАТОРИИ (Бьюти и фитнес РАЗРЕШЕНЫ!) ---
+    "onkologocznego", "dilo", "pielęgniarka", "pielęgniarz",
+    "rejestratorka medyczna", "rejestrator medyczny", "sterylizacji medycznej", 
+    "bioetycznej", "diagnosta laboratoryjny",
+
+    # --- СТРАХОВАНИЕ, OZE, ФРАНШИЗЫ, ХОЛОДНЫЙ B2B ТЕЛЕМАРКЕТИНГ ---
+    "promotor", "liderów sprzedaży", "lider sprzedaży", "ludzi sprzedaży",
+    "opiekun klienta b2b", "projekty inwestycyjne", "projektów inwestycyjnych",
+    "pozyskiwania klientów", "telemarketing b2b",
+    "ubezpieczeń", "reklama kancelarii", "franczyzobiorca", "franczyzobiorczyni",
+    "doradca energetyczny", "oze", "doradca techniczno-handlowy",
+
+    # --- УЗКИЕ ПРЕПОДАВАТЕЛИ (Школа/Репетиторы режутся, Английский и Тренеры РАЗРЕШЕНЫ) ---
+    "nauczyciel", "nauczycielka", "przedszkola", "anatomii", "sprzedaży farmaceutycznej",
+
+    # --- СПЕЦТЕХНИКА, ПОГРУЗЧИКИ UTB, ВОДИТЕЛИ C/E/MEŻDUNARODOWY, МЕХАНИКА ---
     "c+e", "kat. c+e", "kat c+e", "cementowóz", "kierowca międzynarodowy", 
     "kierowca kat. c", "kierowca c", "kierowca e", "autotransporter",
+    "szambiark", "operator koparki", "koparki", "operator utb", "utb",
+    "wywrotkę", "wywrotka", "silników okrętowych",
 
-    # --- ОФИС, АНАЛИТИКА, ПСИХОЛОГИ, ОБРАЗОВАНИЕ, МЕХАНИКИ ---
-    "spedytor", "spedytorka", "analityk danych", "analityk biznesowy",
-    "biznesu edukacyjnego", "raportowania i analiz", "salon sprzedaży",
+    # --- УЗКАЯ ПРОМЫШЛЕННОСТЬ, ТЕХНОЛОГИ, СВАРКА TIG 141, СТРОЙНАДЗОР ---
+    "cieśla", "zbrojarz", "murarz", "kominiarz", "serwisant", "klimatyzacji",
+    "nadzoru budowlanego", "inspektor jakości", "kosztorysant", "rurociągów",
+    "spawanie 141", "141",
+
+    # --- ОФИС, СПЕДИЦИЯ, УПРАВЛЕНИЕ, БАНКИ, HR, ПСИХОЛОГИЯ ---
+    "spedytor", "spedytorka",
+    "biznesu edukacyjnego",
     "regionalny menedżer", "regionalna menedżerka", "psycholog",
     "konsultant medyczny", "mechanik samochodowy", "autobusy",
-    "zwojenie silników", "stacja prób", "nauczyciel", "nauczycielka",
-    "przedszkola", "anatomii", "sprzedaży farmaceutycznej",
-
-    # --- ТЕРАПИЯ, БАНКИ, СЛОЖНАЯ ИНЖЕНЕРИЯ, HR, КРЕАТИВ ---
-    "psychoterapeuta", "psychoterapeutka", "serwisant pv", "bankier",
-    "logopedę", "logopeda", "utrzymanie ruchu", "mechatronik",
-    "doradca biznesowy", "blacharz", "grafik", "asystent projektów",
+    "zwojenie silników", "stacja prób", "psychoterapeuta", "psychoterapeutka",
+    "serwisant pv", "bankier", "logopedę", "logopeda", "utrzymanie ruchu",
+    "mechatronik", "doradca biznesowy", "blacharz", "asystent projektów",
     "compliance", "talent acquisition", "rekrutacja opiekunek",
-    "elektryk przemysłowy", "działu personalnego", "telemarketer",
-    "video content creator",
+    "elektryk przemysłowy", "działu personalnego",
 
-    # --- ЭНЕРГЕТИКА, МАРКЕТИНГ, СПЕЦТЕХНИКА, B2B И АДМИНИСТРАЦИЯ ---
+    # --- ЭНЕРГЕТИКА, МАРКЕТИНГ (B2B/Performance), ГОССЛУЖБА ---
     "energetyk", "energetyczka", "okablowanie rozdzielnic", "performance marketingu",
     "handlowiec b2b", "koparko-ładowarki", "koparko-ładowarka", "administracyjno-finansowych",
     "przedstawiciel bankowy", "sprzedaży aut z usa", "leasingu",
     "sprzedaży zagranicznej", "koordynacja pracy biura", "koordynacji pracy biura",
-
-    # --- ГОССЛУЖБА, ИИ, ШКОЛЫ, РЕНТГЕН, БРИГАДИРЫ И ЛИФТЫ ---
     "inspektor", "inspektorka", "budżetowych", "księgowo-rachunkowym",
     "ds. inwestycji", "wczesnoszkolna", "szkole podstawowej", "wdrożeniowiec",
     "brygadzista", "urządzeń dźwigowych", "technik rtg", "cbct",
 
-    # --- ВЫСОКИЙ ГРЕЙД / СТАРШИЕ ДОЛЖНОСТИ ---
-    "starszy specjalista", "starsza specjalistka", "główny specjalista", "główna specjalistka", "senior", "lead"
+    # --- РИЕЛТОРЫ, IT-DATA, КИБЕРБЕЗОПАСНОСТЬ, ХИМИЯ/ЭКОЛОГИЯ, НАЛОГИ ---
+    "agent nieruchomości", "agentka nieruchomości", "rozwoju danych", "automatyzacji",
+    "recyklingu", "przetwarzania odpadów", "reach i clp", "cyberbezpieczeństwa",
+    "analiz finansowych", "diagnosta samochodowy", "skp", "vat specialist",
+
+    # --- ТОЧНЫЙ ВЫСОКИЙ ГРЕЙД (CТАРШИЕ / ГЛАВНЫЕ ДОЛЖНОСТИ) ---
+    "starszy specjalista", "starsza specjalistka", "główny", "główna", "senior", "lead",
+
+    # --- УЗКИЕ ЯЗЫКОВЫЕ ПРЕПОДАВАТЕЛИ (Английский разрешён!) ---
+    "niemieckiego", "francuskiego", "hiszpańskiego", "włoskiego", 
+    "norweskiego", "duńskiego", "szwedzkiego", "holenderskiego"
 ]
 
 # Короткие слова, которые нельзя искать как подстроку (иначе "it" совпадёт с половиной заголовков).
