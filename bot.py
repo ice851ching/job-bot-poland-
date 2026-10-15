@@ -140,11 +140,19 @@ STOP_WORDS = [
     "elektryk przemysłowy", "działu personalnego", "telemarketer",
     "video content creator",
 
-    # --- НОВЫЙ БЛОК: ЭНЕРГЕТИКА, МАРКЕТИНГ, СПЕЦТЕХНИКА, B2B И АДМИНИСТРАЦИЯ ---
+    # --- ЭНЕРГЕТИКА, МАРКЕТИНГ, СПЕЦТЕХНИКА, B2B И АДМИНИСТРАЦИЯ ---
     "energetyk", "energetyczka", "okablowanie rozdzielnic", "performance marketingu",
     "handlowiec b2b", "koparko-ładowarki", "koparko-ładowarka", "administracyjno-finansowych",
     "przedstawiciel bankowy", "sprzedaży aut z usa", "leasingu",
-    "sprzedaży zagranicznej", "koordynacja pracy biura", "koordynacji pracy biura"
+    "sprzedaży zagranicznej", "koordynacja pracy biura", "koordynacji pracy biura",
+
+    # --- ГОССЛУЖБА, ИИ, ШКОЛЫ, РЕНТГЕН, БРИГАДИРЫ И ЛИФТЫ ---
+    "inspektor", "inspektorka", "budżetowych", "księgowo-rachunkowym",
+    "ds. inwestycji", "wczesnoszkolna", "szkole podstawowej", "wdrożeniowiec",
+    "brygadzista", "urządzeń dźwigowych", "technik rtg", "cbct",
+
+    # --- ВЫСОКИЙ ГРЕЙД / СТАРШИЕ ДОЛЖНОСТИ ---
+    "starszy specjalista", "starsza specjalistka", "główny specjalista", "główna specjalistka", "senior", "lead"
 ]
 
 # Короткие слова, которые нельзя искать как подстроку (иначе "it" совпадёт с половиной заголовков).
