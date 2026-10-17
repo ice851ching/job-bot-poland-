@@ -100,25 +100,29 @@ STOP_WORDS = [
     "prawnik", "adwokat", "radca prawny", "główny księgowy", "główna księgowa",
     "biegły rewident", "doradca podatkowy", "notariusz",
     "spawacz", "tokarz", "operator cnc", "operator dźwigu", 
-    "kwalifikowany pracownik ochrony",
+    "kwalifikowany pracownik ochrony", "szef regionu", "szefowa regionu",
 
     # --- КОМАНДИРОВКИ, ГЕРМАНИЯ И РАБОТА ЗА РУБЕЖОМ ---
     "niemcy", "holandia", "belgia", "norwegia", "szwecja", "francja", 
     "zagranica", "delegacje", "delegacja", "wyjazd do", "niemczech", "hydraulik", "programista", "informatyk", "księgowa",
-    "praca za granicą", "księgowy/a", "fakturzyst", "lektromonter", "sieci elektroenergetycznych", "zarządzania flotą", "księgowy",
+    "praca za granicą", "księgowy/a", "fakturzyst", "lektromonter", "sieci elektroenergetycznych", "zarządzania flotą", "księgowy", "księgowego",
     "irlandia", "farmacji", "przedstawiciel handlowy", "przedstawicielka handlowa", "stralsund",
 
-    # --- ТЯЖЁЛОЕ IT, РAZRABOTKA, ERP, СЛОЖНАЯ АНАЛИТИКА ---
+    # --- СЛОЖНЫЙ IT, РAZRABOTKA, ERP, AI, СИСАДМИНЫ И АНАЛИТИКА ---
     "trader", "commodity", "e-commerce", "geospatial", "data technician",
     "synoptyk", "meteorologik", "wprowadzania danych", "asystent biura",
     "asystentka biura", "administracyjno-biurowy", "księgowość",
     "systemów erp", "web developer", "wordpress", "planowania i analiz",
     "analityk danych", "analityk biznesowy", "raportowania i analiz",
+    "analizy danych", "analiza danych", "administrator systemów", "administratorka systemów",
+    "sysadmin", "ds. ai",
 
-    # --- ЛИЦЕНЗИРУЕМАЯ МЕДИЦИНА И ЛАБОРАТОРИИ (Бьюти и фитнес РАЗРЕШЕНЫ!) ---
+    # --- ЛИЦЕНЗИРУЕМАЯ МЕДИЦИНА, ФАРМА И ЛАБОРАТОРИИ ---
     "onkologocznego", "dilo", "pielęgniarka", "pielęgniarz",
     "rejestratorka medyczna", "rejestrator medyczny", "sterylizacji medycznej", 
     "bioetycznej", "diagnosta laboratoryjny",
+    "przedstawiciel medyczny", "przedstawicielka medyczna", "medical sales", "pharma",
+    "sprzedaż farmaceutyczna",
 
     # --- СТРАХОВАНИЕ, OZE, ФРАНШИЗЫ, ХОЛОДНЫЙ B2B ТЕЛЕМАРКЕТИНГ ---
     "promotor", "liderów sprzedaży", "lider sprzedaży", "ludzi sprzedaży",
@@ -127,14 +131,18 @@ STOP_WORDS = [
     "ubezpieczeń", "reklama kancelarii", "franczyzobiorca", "franczyzobiorczyni",
     "doradca energetyczny", "oze", "doradca techniczno-handlowy",
 
-    # --- УЗКИЕ ПРЕПОДАВАТЕЛИ (Школа/Репетиторы режутся, Английский и Тренеры РАЗРЕШЕНЫ) ---
+    # --- СПЕЦ-ОХРАНА И ЛИЦЕНЗИИ (SUFO) ---
+    "sufo", "grupa interwencyjna", "licencja pracownika ochrony",
+
+    # --- УЗКИЕ ПРЕПОДАВАТЕЛИ (Школа/Репетиторы режутся) ---
     "nauczyciel", "nauczycielka", "przedszkola", "anatomii", "sprzedaży farmaceutycznej",
 
-    # --- СПЕЦТЕХНИКА, ПОГРУЗЧИКИ UTB, ВОДИТЕЛИ C/E/MEŻDUNARODOWY, МЕХАНИКА ---
+    # --- СПЕЦТЕХНИКА, ПОГРУЗЧИКИ UTB, ВОДИТЕЛИ C/E/МЕЖДУНАРОДКА, МЕХАНИКА ---
     "c+e", "kat. c+e", "kat c+e", "cementowóz", "kierowca międzynarodowy", 
     "kierowca kat. c", "kierowca c", "kierowca e", "autotransporter",
     "szambiark", "operator koparki", "koparki", "operator utb", "utb",
     "wywrotkę", "wywrotka", "silników okrętowych",
+    "trasa międzynarodowa", "trasach międzynarodowych", "skoczek",
 
     # --- УЗКАЯ ПРОМЫШЛЕННОСТЬ, ТЕХНОЛОГИ, СВАРКА TIG 141, СТРОЙНАДЗОР ---
     "cieśla", "zbrojarz", "murarz", "kominiarz", "serwisant", "klimatyzacji",
@@ -166,7 +174,7 @@ STOP_WORDS = [
     "recyklingu", "przetwarzania odpadów", "reach i clp", "cyberbezpieczeństwa",
     "analiz finansowych", "diagnosta samochodowy", "skp", "vat specialist",
 
-    # --- ТОЧНЫЙ ВЫСОКИЙ ГРЕЙД (CТАРШИЕ / ГЛАВНЫЕ ДОЛЖНОСТИ) ---
+    # --- ТОЧНЫЙ ВЫСОКИЙ ГРЕЙД (С ТАРШИЕ / ГЛАВНЫЕ ДОЛЖНОСТИ) ---
     "starszy specjalista", "starsza specjalistka", "główny", "główna", "senior", "lead",
 
     # --- УЗКИЕ ЯЗЫКОВЫЕ ПРЕПОДАВАТЕЛИ (Английский разрешён!) ---
@@ -1773,7 +1781,7 @@ def format_job(job):
     if ut:
         details.append(f"📄 {clean(ut)}")
     if et:
-        details.append(f"⏰ {clean(et)}")
+        details.append(f"⏰ <u>{clean(et)}</u>")
     if job.get("city"):
         details.append(f"📍 {clean(job['city'])}")
     if job.get("salary"):
