@@ -304,7 +304,8 @@ CHANNELS_MAPPING = {
     "Poznań": {"id": -1001716517416, "limit": 8, "thread_id": 81854,
                "interval_hours": 2.5, "silent": True,
                "active_hours": (9, 21)},                                                          # Ветка познань (кнопка анкеты: под каждой карточкой, см. LEAD_EVERY_N_OVERRIDE)
-    "Bydgoszcz": {"id": -1001759834702, "limit": 5, "thread_id": 1427, "lead_button": False}    # Ветка 1445 в Быдгощ @ua_bydgoszcz
+    "Bydgoszcz (ua)": {"id": -1001759834702, "limit": 5, "thread_id": 1427, "lead_button": False,
+                       "city": "Bydgoszcz"}    # Ветка 1445 в Быдгощ @ua_bydgoszcz (ключ уникальный, город — в "city")
 }
 
 UMOWY = [
@@ -1669,7 +1670,7 @@ def lead_source_tag(chat_id) -> str:
         return "bot"
     for city, cfg in CHANNELS_MAPPING.items():
         if cfg.get("id") == cid:
-            return re.sub(r"[^a-z0-9]", "", _fold(city)) or "channel"
+            return re.sub(r"[^a-z0-9]", "", _fold(cfg.get("city", city))) or "channel"
     return "channel"
 
 
@@ -2036,7 +2037,7 @@ async def post_jobs_to_channels():
             # Забираем вакансии за последние 2 часа (СВЕЖАК!), убирая отправку старья
             # Для каналов с интервалом окно свежести = интервал + 1 ч, иначе вакансии между постами потеряются
             window_h = max(2, interval_h + 1) if interval_h else 2
-            jobs = await asyncio.to_thread(db_get_jobs_for_city, city, limit=50, hours=window_h)
+            jobs = await asyncio.to_thread(db_get_jobs_for_city, config.get("city", city), limit=50, hours=window_h)
             if not jobs:
                 continue
 
@@ -2180,7 +2181,7 @@ def kb_admin_confirm():
 
 def build_city_options(audience: dict) -> list:
     """Список городов для выбора: города пользователей + города каналов-сателлитов (даже если людей там 0)."""
-    channel_by_slug = {get_city_slug(c): c for c in CHANNELS_MAPPING}
+    channel_by_slug = {get_city_slug(cfg.get("city", c)): cfg.get("city", c) for c, cfg in CHANNELS_MAPPING.items()}
     opts = []
     for slug, g in audience.items():
         label = "🇵🇱 Вся Польша" if slug == "all" else (channel_by_slug.get(slug) or g["label"])
@@ -2240,7 +2241,7 @@ async def run_broadcast(bot: Bot, admin_id: int, from_chat_id: int, message_id: 
     # channels=None -> все каналы (как раньше); иначе только каналы указанных городов
     channel_items = [
         (c, cfg) for c, cfg in CHANNELS_MAPPING.items()
-        if channels is None or c in channels
+        if channels is None or cfg.get("city", c) in channels
     ]
     
     logger.info("📢 Copying broadcast post to all satellite channels...")
@@ -2355,7 +2356,7 @@ def db_init_channels():
             supabase.table("user_filters").upsert(
                 {
                     "telegram_id": channel_id,
-                    "city": city,
+                    "city": config.get("city", city),
                     "etat_full": True,
                     "etat_part": True,
                     "umowa": "any",
