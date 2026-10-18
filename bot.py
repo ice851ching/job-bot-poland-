@@ -107,8 +107,10 @@ STOP_WORDS = [
     "zagranica", "delegacje", "delegacja", "wyjazd do", "niemczech", "hydraulik", "programista", "informatyk", "księgowa",
     "praca za granicą", "księgowy/a", "fakturzyst", "lektromonter", "sieci elektroenergetycznych", "zarządzania flotą", "księgowy", "księgowego",
     "irlandia", "farmacji", "przedstawiciel handlowy", "przedstawicielka handlowa", "stralsund",
+    # (Новые дополнения по странам и командировкам):
+    "do niemiec", "z niemiec", "niemieckiej", "niemiecki", "niemieckiego", "niemieckich", "w holandii", "do holandii", "z holandii", "holenderskiej",
 
-    # --- СЛОЖНЫЙ IT, РAZRABOTKA, ERP, AI, СИСАДМИНЫ И АНАЛИТИКА ---
+    # --- СЛОЖНЫЙ IT, RAZRABOTKA, ERP, AI, СИСАДМИНЫ И АНАЛИТИКА ---
     "trader", "commodity", "e-commerce", "geospatial", "data technician",
     "synoptyk", "meteorologik", "wprowadzania danych", "asystent biura",
     "asystentka biura", "administracyjno-biurowy", "księgowość",
@@ -116,6 +118,8 @@ STOP_WORDS = [
     "analityk danych", "analityk biznesowy", "raportowania i analiz",
     "analizy danych", "analiza danych", "administrator systemów", "administratorka systemów",
     "sysadmin", "ds. ai",
+    # (Новые дополнения по IT/платформам):
+    "platformami integracyjnymi", "integracyjnymi", "elektromobilności",
 
     # --- ЛИЦЕНЗИРУЕМАЯ МЕДИЦИНА, ФАРМА И ЛАБОРАТОРИИ ---
     "onkologocznego", "dilo", "pielęgniarka", "pielęgniarz",
@@ -123,6 +127,8 @@ STOP_WORDS = [
     "bioetycznej", "diagnosta laboratoryjny",
     "przedstawiciel medyczny", "przedstawicielka medyczna", "medical sales", "pharma",
     "sprzedaż farmaceutyczna",
+    # (Новые дополнения по фарме):
+    "przedstawiciel medyczno-farmaceutyczny", "przedstawicielka medyczno-farmaceutyczna", "medyczno-farmaceutyczny",
 
     # --- СТРАХОВАНИЕ, OZE, ФРАНШИЗЫ, ХОЛОДНЫЙ B2B ТЕЛЕМАРКЕТИНГ ---
     "promotor", "liderów sprzedaży", "lider sprzedaży", "ludzi sprzedaży",
@@ -130,6 +136,8 @@ STOP_WORDS = [
     "pozyskiwania klientów", "telemarketing b2b",
     "ubezpieczeń", "reklama kancelarii", "franczyzobiorca", "franczyzobiorczyni",
     "doradca energetyczny", "oze", "doradca techniczno-handlowy",
+    # (Новые дополнения по менеджменту продаж):
+    "menedżer zespołu sprzedaży", "menedżerka zespołu sprzedaży", "menedżer", "menedżerka", "menadżer",
 
     # --- СПЕЦ-ОХРАНА И ЛИЦЕНЗИИ (SUFO) ---
     "sufo", "grupa interwencyjna", "licencja pracownika ochrony",
@@ -143,11 +151,15 @@ STOP_WORDS = [
     "szambiark", "operator koparki", "koparki", "operator utb", "utb",
     "wywrotkę", "wywrotka", "silników okrętowych",
     "trasa międzynarodowa", "trasach międzynarodowych", "skoczek",
+    # (Новые дополнения по правам C/CE и спецтехнике):
+    "kat. c", "kat c", "kat ce", "kat. ce", "powyżej 3,5", "powyzej 3,5", "powyższej 3,5", "3,5 t", "3,5t", "3.5t", "ładowacz",
 
     # --- УЗКАЯ ПРОМЫШЛЕННОСТЬ, ТЕХНОЛОГИ, СВАРКА TIG 141, СТРОЙНАДЗОР ---
     "cieśla", "zbrojarz", "murarz", "kominiarz", "serwisant", "klimatyzacji",
     "nadzoru budowlanego", "inspektor jakości", "kosztorysant", "rurociągów",
     "spawanie 141", "141",
+    # (Новые дополнения по кровельщикам, конструкторам и механикам):
+    "dekarz", "dekarzy", "dekarze", "konstruktor", "konstruktorka", "elektromechanik", "elektromechaniczka",
 
     # --- ОФИС, СПЕДИЦИЯ, УПРАВЛЕНИЕ, БАНКИ, HR, ПСИХОЛОГИЯ ---
     "spedytor", "spedytorka",
@@ -159,6 +171,8 @@ STOP_WORDS = [
     "mechatronik", "doradca biznesowy", "blacharz", "asystent projektów",
     "compliance", "talent acquisition", "rekrutacja opiekunek",
     "elektryk przemysłowy", "działu personalnego",
+    # (Новые дополнения по автопарку):
+    "obsługi floty", "obslugi floty", "obsługa floty",
 
     # --- ЭНЕРГЕТИКА, МАРКЕТИНГ (B2B/Performance), ГОССЛУЖБА ---
     "energetyk", "energetyczka", "okablowanie rozdzielnic", "performance marketingu",
