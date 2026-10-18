@@ -367,6 +367,33 @@ def get_vip_cities_from_db():
 
 # ==================== ПАРСЕРЫ ====================
 
+def olx_pick_offer_link(card):
+    """
+    Возвращает чистую ссылку на САМУ вакансию OLX или None.
+    Профили/фирмы (/firma/, /uzytkownik/), категории и любые ссылки olx.pl без /oferta/ в ПУТИ
+    не принимаются никогда. Если подходящей ссылки нет — карточка пропускается, а не сохраняется с чужой ссылкой.
+    """
+    title_a = card.select_one("a[data-testid='card-title-link']")
+    anchors = ([title_a] if title_a else []) + [a for a in card.find_all("a", href=True) if a is not title_a]
+    for a in anchors:
+        href = (a.get("href") or "").strip()
+        if not href:
+            continue
+        link = href if href.startswith("http") else "https://www.olx.pl" + href
+        link = link.split("?")[0].split("#")[0]
+        parsed = urllib.parse.urlparse(link)
+        host, path = parsed.netloc.lower(), parsed.path.lower()
+        if "olx.pl" in host:
+            if not (path.startswith("/oferta/") or path.startswith("/d/oferta/")):
+                continue
+            if "/firma/" in path or "/uzytkownik/" in path:
+                continue
+            return link
+        # внешний домен (партнёрская карточка) допускаем только если это ссылка заголовка
+        if a is title_a:
+            return link
+    return None
+
 async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
     try:
         slug = get_city_slug(city)
@@ -385,24 +412,22 @@ async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
         for card in cards:
             try:
                 title_tag = card.find("h4") or card.select_one("a[data-testid='card-title-link']")
-                link_tag = card.find("a", href=True)
-                if not title_tag or not link_tag:
+                # Ссылка на вакансию: сначала ссылка заголовка, затем любая /oferta/ (см. olx_pick_offer_link).
+                # Первая <a> в карточке бывает ссылкой на фирму (/firma/...) вокруг логотипа — её не берём.
+                link = olx_pick_offer_link(card)
+                if not title_tag or not link:
                     continue
 
                 title = strip_html(title_tag.get_text(strip=True))
                 if not title:
                     continue
 
-                link = link_tag["href"]
-                if not link.startswith("http"):
-                    link = "https://www.olx.pl" + link
-                link = link.split("?")[0].split("#")[0]
-
+                # Страховка: чужая ссылка olx.pl (профиль/фирма/категория) не должна попасть в базу ни при каких условиях
                 link_lower = link.lower()
                 if "olx.pl" in link_lower:
                     if "/oferta/" not in link_lower:
                         continue
-                    if "/uzytkownik/" in link_lower:
+                    if "/uzytkownik/" in link_lower or "/firma/" in link_lower:
                         continue
 
                 ext_id = hashlib.md5(f"olx_{link}".encode()).hexdigest()
