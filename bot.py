@@ -309,7 +309,7 @@ CHANNELS_MAPPING = {
     "Katowice": {"id": -1004380046261, "limit": 7},                          # @Katowice_rabota
     "Opole": {"id": -1004412087784, "limit": 7},                          # @Praca_Opole
     "Łódź": {"id": -1004493875798, "limit": 7},                          # @LodzRobota
-    "Sosnowiec": {"id": -1004475099126, "limit": 7},                          # @rabota_sosnowiec
+    "Wrocław": {"id": -1004475099126, "limit": 7},                          # @rabota_WroclawUA
     "Toruń": {"id": -1004446519984, "limit": 7},                          # @robota_Torun
     "Zielona Góra": {"id": -1003953807151, "limit": 7},                          # @robota_zielona_gora
     "Bydgoszcz": {"id": -1004457394908, "limit": 7},                          # @robota_bydgoszcz
