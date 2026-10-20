@@ -194,6 +194,19 @@ STOP_WORDS = [
     # --- УЗКИЕ ЯЗЫКОВЫЕ ПРЕПОДАВАТЕЛИ (Английский разрешён!) ---
     "niemieckiego", "francuskiego", "hiszpańskiego", "włoskiego", 
     "norweskiego", "duńskiego", "szwedzkiego", "holenderskiego"
+    # --- ПСИХОТЕРАПИЯ И ЗАВИСИМОСТИ ---
+    "psychoterapeutę", "psychoterapeuta", "psychoterapeutki", "psychoterapeutka",
+    "psychoterapeutów", "uzależnień", "terapeuta uzależnień", "terapeutę uzależnień", 
+    "kpof", "kpof-a", "monitoring wizyjny", "monitoringu wizyjnego", "kat C", "kat. C",
+    "kat.C", "Pyszne.pl",  "maszynisty", "maszynista", "świadectwo maszynisty", "forwarder", "forwardera",
+    "rehabilitant", "rehabilitanta", "przygotowaniem pedagog", "serwisu urządzeń",
+    "pozwoleniem na broń", "pozwolenie na broń", "zastępca brygadzisty",
+    "procesów biznesowych", "nieruchomości handlowych", "pozwoleń wodnoprawnych",
+    "zarządzie zlewni", "hydrotechnicznego", "stopniu wodnym", "grupy kontrolnej",
+    "geotechnical", "geotechnik", "engineer", "berlin", "berlina", "do berlina",
+    "członek zarządu", "zarządu ds.",
+    "elektro-mechanika", "elektryka", "elektronik", "BERLINIE", "włoskim", "telekomunikacyjnych"
+    
 ]
 
 # Короткие слова, которые нельзя искать как подстроку (иначе "it" совпадёт с половиной заголовков).
