@@ -277,7 +277,99 @@ def db_insert_jobs_batch_sync(jobs_list: list) -> int:
 
 
 async def db_insert_jobs_batch(jobs_list: list) -> int:
-    return await asyncio.to_thread(db_insert_jobs_batch_sync, jobs_list)
+    """Вакансии не пишутся в БД сразу, а копятся до конца прогона (см. flush_pending_jobs):
+    решить «это спам-рассылка на все города» можно только увидев ВСЕ города сразу.
+    Возвращает кол-во поставленных в очередь (реальное число сохранённых пишется в лог при flush)."""
+    if not CONTENT_DEDUP_ENABLED:
+        return await asyncio.to_thread(db_insert_jobs_batch_sync, jobs_list)
+    _pending_jobs.extend(jobs_list)
+    return len(jobs_list)
+
+
+# ==================== АНТИ-СПАМ: одинаковая вакансия сразу в куче городов ====================
+# Агентства/скрипты штампуют одну и ту же вакансию на каждый город: источник, название, зарплата, umowa,
+# etat, extra — всё одинаковое, меняется только город. Если ключ (эти поля без города) встречается
+# минимум в CROSS_CITY_MAX разных городах — выкидываем ВСЕ такие вакансии, включая первую.
+# Нормальные вакансии не страдают: у них либо один город, либо отличается хоть одно поле.
+CONTENT_DEDUP_ENABLED = True
+CROSS_CITY_MAX = 3         # с скольких разных городов одинаковая вакансия считается мусором
+CONTENT_DEDUP_DAYS = 7     # окно загрузки из БД, как у get_all_existing_ids
+
+_content_seen = {}   # content_key -> {слаги городов}, уже лежащие в БД за последние дни
+_pending_jobs = []   # буфер вакансий текущего прогона
+
+
+def content_key(job: dict):
+    title = rj_norm(job.get("title"))
+    if not title:
+        return None  # нечего сравнивать — не рискуем, пропускаем как обычно
+    return "|".join([
+        rj_norm(job.get("source")),
+        title,
+        rj_norm(job.get("salary")),
+        str(job.get("umowa") or ""),
+        str(job.get("etat") or ""),
+        rj_norm(job.get("extra")),
+    ])
+
+
+def load_content_keys_from_db():
+    """Подгружает ключи за последние CONTENT_DEDUP_DAYS дней: спам, растянутый на несколько прогонов, тоже ловится."""
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=CONTENT_DEDUP_DAYS)).isoformat()
+        page_size, offset, n = 1000, 0, 0
+        while True:
+            r = (supabase.table("jobs")
+                 .select("external_id,title,city,salary,source,umowa,etat,extra")
+                 .gt("created_at", cutoff).order("external_id")
+                 .range(offset, offset + page_size - 1).execute())
+            if not r.data:
+                break
+            for row in r.data:
+                key = content_key(row)
+                if key:
+                    _content_seen.setdefault(key, set()).add(get_city_slug(row.get("city") or ""))
+                    n += 1
+            if len(r.data) < page_size:
+                break
+            offset += page_size
+        logger.info(f"📦 Loaded {n} jobs ({len(_content_seen)} unique content keys) for spam dedup.")
+    except Exception as e:
+        logger.error(f"load_content_keys_from_db error: {e}")
+
+
+def split_spam(jobs: list):
+    """Делит вакансии на (нормальные, спам). Чистая функция — удобно тестировать."""
+    keyed = [(content_key(j), j) for j in jobs]
+    cities_by_key = {}
+    for k, j in keyed:
+        if k:
+            cities_by_key.setdefault(k, set()).add(get_city_slug(j.get("city") or ""))
+    spam_keys = {
+        k for k, cities in cities_by_key.items()
+        if len(cities | _content_seen.get(k, set())) >= CROSS_CITY_MAX
+    }
+    good = [j for k, j in keyed if k not in spam_keys]
+    bad = [j for k, j in keyed if k in spam_keys]
+    for k in spam_keys:
+        total = len(cities_by_key[k] | _content_seen.get(k, set()))
+        src, title = k.split("|")[0], k.split("|")[1]
+        logger.info(f"🗑️ Spam skipped: [{src}] «{title}» — одинаковая в {total} городах")
+    return good, bad
+
+
+def flush_pending_jobs() -> int:
+    """Вызывается один раз в конце прогона: отсеивает спам и пишет остальное в БД."""
+    jobs = list(_pending_jobs)
+    _pending_jobs.clear()
+    if not jobs:
+        return 0
+    good, bad = split_spam(jobs)
+    logger.info(f"🧹 Spam filter: {len(bad)} из {len(jobs)} вакансий выброшено, сохраняем {len(good)}")
+    saved = 0
+    for i in range(0, len(good), 500):
+        saved += db_insert_jobs_batch_sync(good[i:i + 500])
+    return saved
 
 
 def get_active_cities_from_db() -> list:
@@ -1801,15 +1893,19 @@ async def main():
 
     existing_ids = get_all_existing_ids()
     existing_ids |= get_rocketjobs_ids_all()
+    load_content_keys_from_db()  # дедуп «одна вакансия на все города»
     cities = [args.city] if args.city else (get_active_cities_from_db() or MAIN_SCAN_CITIES[:5])
     vip_all, vip_slugs = get_vip_cities_from_db()
 
     city_sem = asyncio.Semaphore(3)
     ids_lock = asyncio.Lock()
     tasks = [scrape_city_task(c, existing_ids, city_sem, ids_lock, vip_all, vip_slugs) for c in cities]
-    results = await asyncio.gather(*tasks)
+    try:
+        results = await asyncio.gather(*tasks)
+    finally:
+        saved = await asyncio.to_thread(flush_pending_jobs)  # сохраняем накопленное даже если что-то упало
 
-    logger.info(f"✅ Done. Total saved across all cities: {sum(results)}")
+    logger.info(f"✅ Done. Total found: {sum(results)}, saved to DB after spam filter: {saved}")
 
 
 if __name__ == "__main__":
