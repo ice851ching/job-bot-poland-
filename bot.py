@@ -205,8 +205,10 @@ STOP_WORDS = [
     "zarządzie zlewni", "hydrotechnicznego", "stopniu wodnym", "grupy kontrolnej",
     "geotechnical", "geotechnik", "engineer", "berlin", "berlina", "do berlina",
     "członek zarządu", "zarządu ds.",
-    "elektro-mechanika", "elektryka", "elektronik", "BERLINIE", "włoskim", "telekomunikacyjnych"
-    
+    "elektro-mechanika", "elektryka", "elektronik", "BERLINIE", "włoskim", "telekomunikacyjnych",
+    "nieruchomości", "Ambasador", "Ambasadorka", "Ambasador/Ambasadorka", "francuskim", "B2B",
+    "Maszyn Budowlanych", "Reumatolog", "Oprogramowania", "Oprogramowanie", "Lider", "Liderka", 
+    "Zdalna", "Zdalnie", "Telekomunikacyjne", "Mechanik", "wentylacji", "Hungarian"
 ]
 
 # Короткие слова, которые нельзя искать как подстроку (иначе "it" совпадёт с половиной заголовков).
