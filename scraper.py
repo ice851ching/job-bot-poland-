@@ -270,7 +270,7 @@ def db_insert_jobs_batch_sync(jobs_list: list) -> int:
             on_conflict="external_id",
             ignore_duplicates=True
         ).execute()
-        return len(r.data) if r.data else len(jobs_list)
+        return len(r.data) if r.data is not None else len(jobs_list)
     except Exception as e:
         logger.error(f"❌ db_insert_jobs_batch error: {e}")
         return 0
@@ -365,10 +365,11 @@ def flush_pending_jobs() -> int:
     if not jobs:
         return 0
     good, bad = split_spam(jobs)
-    logger.info(f"🧹 Spam filter: {len(bad)} из {len(jobs)} вакансий выброшено, сохраняем {len(good)}")
+    logger.info(f"🧹 Spam filter: {len(bad)} из {len(jobs)} выброшено как спам, отправляем в БД {len(good)}")
     saved = 0
     for i in range(0, len(good), 500):
         saved += db_insert_jobs_batch_sync(good[i:i + 500])
+    logger.info(f"💽 Реально добавлено новых строк: {saved}; уже были в БД (по external_id): {len(good) - saved}")
     return saved
 
 
@@ -1905,7 +1906,7 @@ async def main():
     finally:
         saved = await asyncio.to_thread(flush_pending_jobs)  # сохраняем накопленное даже если что-то упало
 
-    logger.info(f"✅ Done. Total found: {sum(results)}, saved to DB after spam filter: {saved}")
+    logger.info(f"✅ Done. Найдено парсерами: {sum(results)}, реально добавлено в БД: {saved}")
 
 
 if __name__ == "__main__":
