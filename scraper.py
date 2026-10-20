@@ -487,6 +487,16 @@ def olx_pick_offer_link(card):
             return link
     return None
 
+def olx_is_refreshed(card) -> bool:
+    """True, если работодатель освежил старое объявление: в футере «Odświeżono dzisiaj o 15:07».
+    У реально новых там просто «Dzisiaj o 20:07»."""
+    for p in card.find_all("p"):
+        t = p.get_text(" ", strip=True).lower()
+        if t.startswith("odświeżono") or t.startswith("odswiezono"):
+            return True
+    return False
+
+
 async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
     try:
         slug = get_city_slug(city)
@@ -501,6 +511,7 @@ async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
             return 0
 
         jobs_to_save = []
+        refreshed = 0
 
         for card in cards:
             try:
@@ -513,6 +524,11 @@ async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
 
                 title = strip_html(title_tag.get_text(strip=True))
                 if not title:
+                    continue
+
+                # Освежённое объявление («Odświeżono ...») — старая вакансия, которую работодатель поднял наверх
+                if olx_is_refreshed(card):
+                    refreshed += 1
                     continue
 
                 # Страховка: чужая ссылка olx.pl (профиль/фирма/категория) не должна попасть в базу ни при каких условиях
@@ -556,7 +572,7 @@ async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
                 logger.error(f"OLX card item error: {e}")
 
         saved = await db_insert_jobs_batch(jobs_to_save)
-        logger.info(f"OLX saved={saved} city={city}")
+        logger.info(f"OLX saved={saved} (refreshed_skipped={refreshed}) city={city}")
         return saved
     except Exception as e:
         logger.error(f"parse_olx({city}) error: {e}")
