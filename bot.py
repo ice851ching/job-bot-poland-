@@ -1996,12 +1996,35 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
 
         sent_job_ids_batch = []
 
+        # Лимит OLX за цикл: из подходящих этому юзеру вакансий OLX оставляем olx_cap лучших,
+        # все остальные ВЫБРАСЫВАЕМ (помечаем отправленными), чтобы не возвращались в следующих циклах.
+        olx_discard_ids = []
+        if olx_cap is not None:
+            olx_kept = 0
+            for job in jobs:  # jobs уже отсортированы по приоритету
+                jid = job.get("id")
+                if jid is None or jid in already_sent_ids or not is_olx_source(job.get("source")):
+                    continue
+                if is_invalid_olx_url(job.get("url")) or is_delivery_job(job):
+                    continue
+                if user_filter and not job_matches_filter(job, user_filter):
+                    continue
+                if olx_kept < olx_cap:
+                    olx_kept += 1
+                else:
+                    olx_discard_ids.append(jid)
+        olx_discard_set = set(olx_discard_ids)
+
         for job in jobs:
             if sent >= limit:
                 break
 
             job_id = job.get("id")
             if job_id is None:
+                continue
+
+            if job_id in olx_discard_set:
+                olx_capped += 1
                 continue
 
             # GoWork / Infopraca — только для VIP (не помечаем как отправленные: после покупки VIP они дойдут)
@@ -2022,11 +2045,6 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
 
             if job_id in already_sent_ids:
                 ss += 1
-                continue
-
-            # Лимит OLX за цикл (Краков/Лодзь/Вроцлав): остальные не помечаем — уйдут в следующих циклах
-            if olx_cap is not None and is_olx_source(job.get("source")) and olx_sent >= olx_cap:
-                olx_capped += 1
                 continue
 
             try:
@@ -2070,6 +2088,10 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
             except Exception as e:
                 logger.warning(f"send to {tid} error: {e}")
                 break
+
+        if olx_discard_ids:
+            await asyncio.to_thread(db_mark_sent_batch, tid, olx_discard_ids)
+            logger.info(f"User {tid}: OLX cap={olx_cap}, discarded {len(olx_discard_ids)} extra OLX jobs")
 
         if sent_job_ids_batch:
             ok = await asyncio.to_thread(db_mark_sent_batch, tid, sent_job_ids_batch)
@@ -2178,8 +2200,9 @@ async def post_jobs_to_channels():
             # 2. Идем по списку уникальных свежих вакансий
             for job in new_jobs:
                 job_id = job["id"]
-                # Лимит OLX за цикл: лишние не помечаем, они уйдут в следующих циклах (пока свежие)
+                # Лимит OLX за цикл: лишние ВЫБРАСЫВАЕМ (помечаем отправленными), в следующих циклах их не будет
                 if olx_cap is not None and is_olx_source(job.get("source")) and olx_sent >= olx_cap:
+                    skipped_job_ids_batch.append(job_id)
                     continue
                 if sent_count < limit:
                     # Отправляем только до достижения лимита
