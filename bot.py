@@ -208,7 +208,7 @@ STOP_WORDS = [
     "elektro-mechanika", "elektryka", "elektronik", "BERLINIE", "włoskim", "telekomunikacyjnych",
     "nieruchomości", "Ambasador", "Ambasadorka", "Ambasador/Ambasadorka", "francuskim", "B2B",
     "Maszyn Budowlanych", "Reumatolog", "Oprogramowania", "Oprogramowanie", "Lider", "Liderka", 
-    "Zdalna", "Zdalnie", "Telekomunikacyjne", "Mechanik", "wentylacji", "Hungarian"
+    "Zdalna", "Zdalnie", "Telekomunikacyjne", "Mechanik", "wentylacji", "Fizioterapeuta", "Elektryk", "Elektryczka", "Hungarian"
 ]
 
 # Короткие слова, которые нельзя искать как подстроку (иначе "it" совпадёт с половиной заголовков).
@@ -800,10 +800,77 @@ def is_delivery_job(job):
     return bool(_BLOCKED_WORDS_RE.search(title))
 
 
+# ==================== ПРИОРИТИЗАЦИЯ И ЛИМИТ OLX ====================
+
+# Города, где OLX генерит слишком много вакансий: за один цикл (15 мин) шлём максимум N штук с OLX.
+# Остальные не теряются: они остаются неотправленными и уходят в следующих циклах (лучшие — первыми).
+OLX_CAP_CITIES = {"krakow", "lodz", "wroclaw"}
+OLX_CAP_PER_CYCLE = 2
+
+# Пессимизация: вакансии с этими словами в заголовке НЕ блокируются, а уходят в конец очереди.
+# Сравнение как у STOP_WORDS: без регистра и без польских диакритик, по подстроке (слова — основы).
+DEPRIORITIZE_WORDS = [
+    # --- СТРОЙКА И ОТДЕЛКА ---
+    "budowlan", "budowa", "budowy", "budowie", "budownict", "na budow",
+    "pomocnik budowlan", "pracownik budowlan", "malarz", "malowani", "tynkarz", "tynkowani",
+    "gladz", "gipsow", "plyt gipsowo", "glazurnik", "kafelk", "plytkarz", "ukladani",
+    "posadzk", "wylewk", "betoniarz", "betonowani", "szalunk", "zbrojen", "rusztowa",
+    "ocieplen", "docieplen", "elewac", "fasad", "izolacj", "brukarz", "brukarsk",
+    "wykonczeni", "remont", "monter", "montaz", "instalator", "stolarz", "slusarz",
+    "ogrodzeni", "dachow", "pokryc dachow", "murowani", "kafelkarz", "ekipa budowlan",
+    "stal zbrojeniowa", "konstrukcji stalowych", "konstrukcji drewnianych",
+    # --- КУРЬЕРЫ / ДОСТАВКА ---
+    "kurier", "roznosiciel", "rozwoz", "dostarczani", "rozwoz", "Elektryk", "Logistyki", "Logistyka", "inwestycyjnych",
+    "Medyczna", "Medyczny", "duńskim", "włoskim", "czeskim", "Logistyki", "belgijskim", "Belgii", "Kucharz", "Norwegii"
+]
+_DEPRIORITIZE_SUBSTRINGS = tuple(dict.fromkeys(_fold(w) for w in DEPRIORITIZE_WORDS))
+
+
+def is_deprioritized_job(job) -> bool:
+    title = _fold(job.get("title"))
+    return any(w in title for w in _DEPRIORITIZE_SUBSTRINGS)
+
+
+def job_priority(job) -> int:
+    """
+    Чем выше — тем раньше вакансия уйдёт. Плюсы: указана зарплата, указан тип договора,
+    неполный рабочий день (+ бонус, если есть всё сразу). Стройка/курьерство — сильный минус.
+    """
+    score = 0
+    has_salary = bool(str(job.get("salary") or "").strip())
+    has_umowa = bool(get_all_job_umowas(job.get("umowa")))
+    is_part = normalize_etat(job.get("etat")) == "part"
+    if has_salary:
+        score += 2
+    if has_umowa:
+        score += 2
+    if is_part:
+        score += 3
+    if has_salary and has_umowa and is_part:
+        score += 3
+    if is_deprioritized_job(job):
+        score -= 20
+    return score
+
+
+def sort_by_priority(jobs):
+    """Стабильная сортировка: при равном приоритете сохраняется исходный порядок (свежесть)."""
+    return sorted(jobs, key=lambda j: -job_priority(j))
+
+
+def is_olx_source(source) -> bool:
+    return "olx" in re.sub(r"[^a-z0-9]", "", str(source or "").lower())
+
+
+def olx_cap_for_city(city):
+    """Лимит OLX за цикл для города (Краков/Лодзь/Вроцлав) или None, если ограничения нет."""
+    return OLX_CAP_PER_CYCLE if get_city_slug(city) in OLX_CAP_CITIES else None
+
+
 def is_invalid_olx_url(url: str) -> bool:
     if not url:
         return True
-    
+
     url_lower = url.lower()
     if "olx.pl" in url_lower:
         if "/oferta/" not in url_lower:
@@ -1911,10 +1978,12 @@ async def send_promo(chat_id, lang="ru"):
         logger.error(f"promo error: {e}")
 
 
-async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=False, is_vip=False):
+async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=False, is_vip=False, olx_cap=None):
     async with get_user_lock(tid):
         sent, sf, ss, blocked, vip_only = 0, 0, 0, 0, 0
-        
+        olx_sent, olx_capped = 0, 0
+        jobs = sort_by_priority(jobs)
+
         # Получаем историю отправки с предохранителем
         already_sent_ids = await asyncio.to_thread(
             db_get_sent_job_ids, tid, [j["id"] for j in jobs if j.get("id") is not None]
@@ -1955,11 +2024,18 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
                 ss += 1
                 continue
 
+            # Лимит OLX за цикл (Краков/Лодзь/Вроцлав): остальные не помечаем — уйдут в следующих циклах
+            if olx_cap is not None and is_olx_source(job.get("source")) and olx_sent >= olx_cap:
+                olx_capped += 1
+                continue
+
             try:
                 await send_job_card(tid, job)
                 sent_job_ids_batch.append(job_id)
                 already_sent_ids.add(job_id)
                 sent += 1
+                if is_olx_source(job.get("source")):
+                    olx_sent += 1
 
                 await asyncio.sleep(0.05)
 
@@ -1972,6 +2048,8 @@ async def send_jobs_to_user(tid, jobs, user_filter=None, limit=15, is_initial=Fa
                     sent_job_ids_batch.append(job_id)
                     already_sent_ids.add(job_id)
                     sent += 1
+                    if is_olx_source(job.get("source")):
+                        olx_sent += 1
                 except TelegramForbiddenError:
                     logger.warning(f"send to {tid}: bot was blocked by user")
                     await asyncio.to_thread(db_set_user_active, tid, False)
@@ -2092,9 +2170,17 @@ async def post_jobs_to_channels():
                     continue
                 new_jobs.append(job)
 
+            # Лучшие (зарплата + умова + неполный етат) — первыми, стройка/курьеры — в конец
+            new_jobs = sort_by_priority(new_jobs)
+            olx_cap = olx_cap_for_city(config.get("city", city))
+            olx_sent = 0
+
             # 2. Идем по списку уникальных свежих вакансий
             for job in new_jobs:
                 job_id = job["id"]
+                # Лимит OLX за цикл: лишние не помечаем, они уйдут в следующих циклах (пока свежие)
+                if olx_cap is not None and is_olx_source(job.get("source")) and olx_sent >= olx_cap:
+                    continue
                 if sent_count < limit:
                     # Отправляем только до достижения лимита
                     try:
@@ -2107,6 +2193,8 @@ async def post_jobs_to_channels():
                         sent_job_ids_batch.append(job_id)
                         already_sent_ids.add(job_id)
                         sent_count += 1
+                        if is_olx_source(job.get("source")):
+                            olx_sent += 1
                         await asyncio.sleep(3.0)
                     except Exception as post_error:
                         logger.error(f"Failed to send post to channel {channel_id}: {post_error}")
@@ -2992,7 +3080,7 @@ async def scheduled_check():
                 try:
                     return await send_jobs_to_user(
                         tid, fresh_jobs, user_filter=uf, limit=user_limit,
-                        is_vip=(tid in vip_ids)
+                        is_vip=(tid in vip_ids), olx_cap=olx_cap_for_city(city)
                     )
                 except asyncio.CancelledError:
                     raise
