@@ -523,8 +523,10 @@ async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
         if slug:
             canon = soup.find("link", rel="canonical")
             canon_href = ((canon.get("href") if canon else "") or "").lower()
-            if f"/praca/{slug}" not in canon_href:
-                logger.warning(f"OLX: редирект с /praca/{slug}/ (canonical={canon_href or 'нет'}) — пропускаю {city}")
+            # Скипаем только если canonical ЕСТЬ и явно указывает не на наш город.
+            # Нет canonical — не трогаем страницу (лучше пропустить защиту, чем сломать парсинг нормального города).
+            if canon_href and f"/praca/{slug}" not in canon_href:
+                logger.warning(f"OLX: редирект с /praca/{slug}/ (canonical={canon_href}) — пропускаю {city}")
                 return 0
 
         cards = soup.find_all("div", attrs={"data-cy": "l-card"}) or soup.select("div.jobs-ad-card")
