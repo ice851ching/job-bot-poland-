@@ -71,6 +71,17 @@ def get_city_slug(city: str) -> str:
     return cl
 
 
+# OLX пишет города с составными названиями слитно (в отличие от Rocketjobs/Praca.pl)
+OLX_SLUG_OVERRIDES = {
+    "zielona-gora": "zielonagora",
+}
+
+
+def get_olx_slug(city: str) -> str:
+    slug = get_city_slug(city)
+    return OLX_SLUG_OVERRIDES.get(slug, slug)
+
+
 def strip_html(text):
     if not text:
         return ""
@@ -499,13 +510,23 @@ def olx_is_refreshed(card) -> bool:
 
 async def parse_olx(city: str, existing_ids: set, lock: asyncio.Lock) -> int:
     try:
-        slug = get_city_slug(city)
+        slug = get_olx_slug(city)
         url = f"https://www.olx.pl/praca/{slug}/?search%5Border%5D=created_at:desc" if slug else "https://www.olx.pl/praca/?search%5Border%5D=created_at:desc"
         status, html = await asyncio.to_thread(fetch_url_with_retry, url, "https://www.google.com/")
         if status != 200 or not html:
             return 0
 
         soup = BeautifulSoup(html, "html.parser")
+
+        # Защита от тихого редиректа: если OLX не узнал slug города, он отдаёт общую выдачу по всей Польше.
+        # Тогда canonical не будет указывать на /praca/<slug>/ — пропускаем город, а не сохраняем чужие вакансии.
+        if slug:
+            canon = soup.find("link", rel="canonical")
+            canon_href = ((canon.get("href") if canon else "") or "").lower()
+            if f"/praca/{slug}" not in canon_href:
+                logger.warning(f"OLX: редирект с /praca/{slug}/ (canonical={canon_href or 'нет'}) — пропускаю {city}")
+                return 0
+
         cards = soup.find_all("div", attrs={"data-cy": "l-card"}) or soup.select("div.jobs-ad-card")
         if not cards:
             return 0
