@@ -117,7 +117,7 @@ STOP_WORDS = [
     "systemów erp", "web developer", "wordpress", "planowania i analiz",
     "analityk danych", "analityk biznesowy", "raportowania i analiz",
     "analizy danych", "analiza danych", "administrator systemów", "administratorka systemów",
-    "sysadmin", "ds. ai",
+    "sysadmin", "web", "developer", "chemicznej", "ds. ai",
     # (Новые дополнения по IT/платформам):
     "platformami integracyjnymi", "integracyjnymi", "elektromobilności",
 
@@ -125,8 +125,9 @@ STOP_WORDS = [
     "onkologocznego", "dilo", "pielęgniarka", "pielęgniarz",
     "rejestratorka medyczna", "rejestrator medyczny", "sterylizacji medycznej", 
     "bioetycznej", "diagnosta laboratoryjny",
-    "przedstawiciel medyczny", "przedstawicielka medyczna", "medical sales", "pharma",
-    "sprzedaż farmaceutyczna",
+    "przedstawiciel medyczny", "farmaceutycznej", "neofilologii", "Detektyw", "Międzynarodowej", "Terapeuta",
+    "przedstawicielka medyczna", "medical sales", "pharma",
+    "sprzedaż farmaceutyczna", "pielęgniarkę", "Fizjoterapeutów", "niemieckojęzycznego", "międzynarodowym",
     # (Новые дополнения по фарме):
     "przedstawiciel medyczno-farmaceutyczny", "przedstawicielka medyczno-farmaceutyczna", "medyczno-farmaceutyczny",
 
