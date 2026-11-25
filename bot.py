@@ -194,7 +194,10 @@ STOP_WORDS = [
 
     # --- УЗКИЕ ЯЗЫКОВЫЕ ПРЕПОДАВАТЕЛИ (Английский разрешён!) ---
     "niemieckiego", "francuskiego", "hiszpańskiego", "włoskiego", 
-    "norweskiego", "duńskiego", "szwedzkiego", "holenderskiego"
+    "norweskiego", "duńskiego", "szwedzkiego", "Farmakologia", "Farmakologii",
+    "Medyczna", "German", "zdalnej", "Digital", "Księgowej", "Okulisty", "Księgowej",
+    "Dentystycznych", "Dietycznego", "księgowej", "Technolog", "dentystyczny", "Kadr i Płac",
+    "kadr i płac", "matematyki", "Ambassador", "Farmaceutyczna", "Farmaceutyczny", "prawnego", "holenderskiego"
     # --- ПСИХОТЕРАПИЯ И ЗАВИСИМОСТИ ---
     "psychoterapeutę", "psychoterapeuta", "psychoterapeutki", "psychoterapeutka",
     "psychoterapeutów", "uzależnień", "terapeuta uzależnień", "terapeutę uzależnień", 
@@ -1906,7 +1909,7 @@ def format_job(job, footer_tag=None):
     message = (
         f"💼 <b>{title}</b>\n"
         f"<blockquote>{quote_content}</blockquote>\n"
-        f"<a href='https://t.me/{footer_user}'>@{footer_user}</a> — Świeże oferty pracy w Polsce 🇵🇱"
+        f"<a href='https://t.me/{footer_user}'>@{footer_user}</a> — Świeże oferty pracy 🇵🇱"
     )
 
     return message.strip()
