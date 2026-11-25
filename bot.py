@@ -313,23 +313,23 @@ CITY_SLUGS = {
 
 # ==================== КАРТА КАНАЛОВ ДЛЯ АВТОПОСТИНГА ====================
 CHANNELS_MAPPING = {
-    "Lublin": {"id": -1004402210524, "limit": 7},                          # @Praca_Lublin
-    "Białystok": {"id": -1004359303051, "limit": 7},                       # @Praca_Belostok
-    "Radom": {"id": -1003797919409, "limit": 7},                           # @Praca_Radom
-    "Częstochowa": {"id": -1004372087006, "limit": 7},                     # @Praca_Czestochowa
-    "Rzeszów": {"id": -1003849575739, "limit": 7},                         # @Praca_rzeszow_ua
-    "Gdańsk": {"id": -1004432735605, "limit": 9},                          # @Rabota_Gdansk_ua
-    "Kraków": {"id": -1003956905015, "limit": 9},                          # @PracaKrakow
-    "Szczecin": {"id": -1003953428416, "limit": 7},                        # @Praca_Szczecin
-    "Gliwice": {"id": -1003332626026, "limit": 7},                        # @rabota_gliwice
-    "Katowice": {"id": -1004380046261, "limit": 7},                          # @Katowice_rabota
-    "Opole": {"id": -1004412087784, "limit": 7},                          # @Praca_Opole
-    "Łódź": {"id": -1004493875798, "limit": 7},                          # @LodzRobota
-    "Wrocław": {"id": -1004475099126, "limit": 7},                          # @rabota_WroclawUA
-    "Toruń": {"id": -1004446519984, "limit": 7},                          # @robota_Torun
-    "Zielona Góra": {"id": -1003953807151, "limit": 7},                          # @robota_zielona_gora
-    "Bydgoszcz": {"id": -1004457394908, "limit": 7},                          # @robota_bydgoszcz
-    "Olsztyn": {"id": -1003909884722, "limit": 7},                          # @robota_olsztyn
+    "Lublin": {"tag": "Praca_Lublin", "id": -1004402210524, "limit": 7},                          # @Praca_Lublin
+    "Białystok": {"tag": "Praca_Belostok", "id": -1004359303051, "limit": 7},                       # @Praca_Belostok
+    "Radom": {"tag": "Praca_Radom", "id": -1003797919409, "limit": 7},                           # @Praca_Radom
+    "Częstochowa": {"tag": "Praca_Czestochowa", "id": -1004372087006, "limit": 7},                     # @Praca_Czestochowa
+    "Rzeszów": {"tag": "Praca_rzeszow_ua", "id": -1003849575739, "limit": 7},                         # @Praca_rzeszow_ua
+    "Gdańsk": {"tag": "Rabota_Gdansk_ua", "id": -1004432735605, "limit": 9},                          # @Rabota_Gdansk_ua
+    "Kraków": {"tag": "PracaKrakow", "id": -1003956905015, "limit": 9},                          # @PracaKrakow
+    "Szczecin": {"tag": "Praca_Szczecin", "id": -1003953428416, "limit": 7},                        # @Praca_Szczecin
+    "Gliwice": {"tag": "rabota_gliwice", "id": -1003332626026, "limit": 7},                        # @rabota_gliwice
+    "Katowice": {"tag": "Katowice_rabota", "id": -1004380046261, "limit": 7},                          # @Katowice_rabota
+    "Opole": {"tag": "Praca_Opole", "id": -1004412087784, "limit": 7},                          # @Praca_Opole
+    "Łódź": {"tag": "LodzRobota", "id": -1004493875798, "limit": 7},                          # @LodzRobota
+    "Wrocław": {"tag": "rabota_WroclawUA", "id": -1004475099126, "limit": 7},                          # @rabota_WroclawUA
+    "Toruń": {"tag": "robota_Torun", "id": -1004446519984, "limit": 7},                          # @robota_Torun
+    "Zielona Góra": {"tag": "robota_zielona_gora", "id": -1003953807151, "limit": 7},                          # @robota_zielona_gora
+    "Bydgoszcz": {"tag": "robota_bydgoszcz", "id": -1004457394908, "limit": 7},                          # @robota_bydgoszcz
+    "Olsztyn": {"tag": "robota_olsztyn", "id": -1003909884722, "limit": 7},                          # @robota_olsztyn
     # Познань (по просьбе админа): до 8 вакансий за пост, не чаще раза в 2.5 ч,
     # только с 09:00 до 21:00 по Варшаве, без звука
     "Poznań": {"id": -1001716517416, "limit": 8, "thread_id": 81854,
@@ -1861,7 +1861,7 @@ def source_hashtag(source) -> str:
     return ""
 
 
-def format_job(job):
+def format_job(job, footer_tag=None):
     """
     Карточка вакансии: заголовок сверху, все подробности внутри цитаты blockquote.
     Ссылки на вакансию в тексте нет — она вынесена в inline-кнопку (см. get_job_keyboard).
@@ -1901,13 +1901,27 @@ def format_job(job):
 
     quote_content = "\n".join(details)
 
+    # Подпись внизу: в своих каналах — тег канала, в чужих (Познань, Быдгощ ветка) и в боте — тег бота
+    footer_user = footer_tag or "szukam_pracy_bot"
     message = (
         f"💼 <b>{title}</b>\n"
         f"<blockquote>{quote_content}</blockquote>\n"
-        f"<a href='https://t.me/szukam_pracy_bot'>@szukam_pracy_bot</a> — Świeże oferty pracy w Polsce 🇵🇱"
+        f"<a href='https://t.me/{footer_user}'>@{footer_user}</a> — Świeże oferty pracy w Polsce 🇵🇱"
     )
 
     return message.strip()
+
+
+def channel_footer_tag(chat_id):
+    """Тег канала для подписи под вакансией. None -> тег бота (ЛС, Познань, Быдгощ ua и любые каналы без ключа tag)."""
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return None
+    for cfg in CHANNELS_MAPPING.values():
+        if cfg.get("id") == cid:
+            return cfg.get("tag")
+    return None
 
 
 def _lead_due(chat_id) -> bool:
@@ -1938,7 +1952,7 @@ async def send_job_card(chat_id, job, lead_allowed: bool = True, **kwargs):
         try:
             result = await bot.send_message(
                 chat_id,
-                format_job(job),
+                format_job(job, footer_tag=channel_footer_tag(chat_id)),
                 parse_mode="HTML",
                 disable_web_page_preview=True,
                 reply_markup=kb,
@@ -1949,7 +1963,7 @@ async def send_job_card(chat_id, job, lead_allowed: bool = True, **kwargs):
                 logger.warning(f"Job {job.get('id')}: Telegram rejected button url {url!r}, resending without button")
                 result = await bot.send_message(
                     chat_id,
-                    format_job(job),
+                    format_job(job, footer_tag=channel_footer_tag(chat_id)),
                     parse_mode="HTML",
                     disable_web_page_preview=True,
                     **kwargs,
